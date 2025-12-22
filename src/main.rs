@@ -1,15 +1,17 @@
 #![allow(unused_imports)]
 use std::{
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
 };
 
 fn handle_stream(mut stream: &TcpStream) -> Result<(), std::io::Error> {
-    // let mut string_buffer = String::new();
+    //let mut string_buffer = String::new();
     // stream.read_to_string(&mut string_buffer)?;
     // println!("Received data: {}", string_buffer);
-    stream.write_all(b"+PONG\r\n")?;
-    Ok(())
+
+    loop {
+        stream.write_all(b"+PONG\r\n")?;
+    }
 }
 
 fn main() {
