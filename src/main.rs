@@ -5,18 +5,23 @@ fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
 
-    // Uncomment the code below to pass the first stage
-    //
-    // let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
-    //
-    // for stream in listener.incoming() {
-    //     match stream {
-    //         Ok(_stream) => {
-    //             println!("accepted new connection");
-    //         }
-    //         Err(e) => {
-    //             println!("error: {}", e);
-    //         }
-    //     }
-    // }
+    // Bind the TCP listener to the specified address and port
+    let addr = std::env::var("REDIS_ADDR").unwrap_or_else(|_| "127.0.0.1:6379".to_string());
+
+    let tcp_binding = TcpListener::bind(&addr);
+
+    if let Ok(listener) = tcp_binding {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(_stream) => {
+                    println!("accepted new connection on {}", addr);
+                }
+                Err(e) => {
+                    println!("error: {}", e);
+                }
+            }
+        }
+    } else {
+        panic!("Failed to bind to port");
+    }
 }
