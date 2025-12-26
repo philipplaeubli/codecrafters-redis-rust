@@ -26,14 +26,19 @@ fn handle_input(input: RedisType) -> Result<String, RespParseError> {
             let command = s.to_string().to_uppercase();
             match command.as_str() {
                 "PING" => Ok("+PONG\r\n".to_string()),
+
                 "ECHO" => {
-                    let message = elements.get(1).ok_or(RespParseError::InvalidFormat)?;
-                    match message {
-                        RedisType::BulkString(value) => {
-                            Ok(format!("${}\r\n{}\r\n", value.len(), value))
-                        }
-                        _ => Err(RespParseError::InvalidFormat),
-                    }
+                    let some = &elements[1..];
+                    let message = some
+                        .iter()
+                        .map(|f| match f {
+                            RedisType::BulkString(value) => value,
+                            _ => "",
+                        })
+                        .collect::<Vec<&str>>()
+                        .join(" ");
+
+                    Ok(format!("${}\r\n{}\r\n", message.len(), message))
                 }
                 _ => Err(RespParseError::InvalidFormat),
             }
