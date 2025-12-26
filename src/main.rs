@@ -1,6 +1,8 @@
 #![allow(unused_imports)]
 use std::{
-    io::{BufRead, BufReader, Read, Write},
+    borrow::Cow,
+    ffi::IntoStringError,
+    io::{BufRead, BufReader, Error, Read, Write},
     thread,
 };
 
@@ -9,39 +11,78 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
-async fn handle_connection(mut stream: TcpStream) -> Result<(), std::io::Error> {
-    let mut buffer = [0u8; 128];
-    loop {
-        let result = stream.read(&mut buffer).await?;
-        if result == 0 {
-            // Connection closed by client
-            println!("Connection closed by client");
-            return Ok(());
-        } else if result > 0 {
-            // don't care if we got some error, just send PONG
-            stream.write_all(b"+PONG\r\n").await?;
-            println!("Sent PONG");
+use crate::parser::{RedisType, RespParseError, parse_resp};
+mod parser;
+
+fn handle_input(input: RedisType) -> Result<String, RespParseError> {
+    let RedisType::Array(elements) = input else {
+        unreachable!("parse_array must return RedisType::Array")
+    };
+
+    let first_element = elements.first().ok_or(RespParseError::InvalidFormat)?;
+
+    match first_element {
+        RedisType::BulkString(s) => {
+            let command = s.to_string().to_uppercase();
+            match command.as_str() {
+                "PING" => Ok("+PONG\r\n".to_string()),
+                "ECHO" => {
+                    let message = elements.get(1).ok_or(RespParseError::InvalidFormat)?;
+                    match message {
+                        RedisType::BulkString(value) => {
+                            Ok(format!("${}\r\n{}\r\n", value.len(), value))
+                        }
+                        _ => Err(RespParseError::InvalidFormat),
+                    }
+                }
+                _ => Err(RespParseError::InvalidFormat),
+            }
         }
+        _ => Err(RespParseError::InvalidFormat),
     }
+}
+
+async fn handle_connection(mut stream: TcpStream) -> Result<(), RespParseError> {
+    let mut buffer = [0; 1024];
+    loop {
+        let read_length = stream.read(&mut buffer).await?;
+
+        if read_length == 0 {
+            println!("Received empty input");
+            break;
+        }
+        let input_str = match str::from_utf8(&buffer[0..read_length]) {
+            Ok(input_str) => input_str,
+            Err(_) => {
+                println!("Received invalid input");
+                break;
+            }
+        };
+        println!("Received input: {:?}", input_str);
+        let result = parse_resp(&buffer[0..read_length])?;
+        println!("Parsed response: {:?}", result);
+        let response = handle_input(result)?;
+
+        stream.write_all(response.as_bytes()).await?
+    }
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    println!("Logs from your program will appear here!");
+    let redis_address =
+        std::env::var("REDIS_ADDR").unwrap_or_else(|_| "127.0.0.1:6379".to_string());
 
-    // Bind the TCP listener to the specified address and port
-    let addr = std::env::var("REDIS_ADDR").unwrap_or_else(|_| "127.0.0.1:6379".to_string());
-    let tcp_binding = TcpListener::bind(&addr);
-    let tcp_listener = tcp_binding.await?;
-    println!("Listening on {} - awaiting connections", addr);
+    let tcp_listener = TcpListener::bind(&redis_address).await?;
+
+    println!("Listening on {} - awaiting connections", redis_address);
     loop {
         let (stream, _addr) = tcp_listener.accept().await?;
         println!("Accepted connection from client");
 
         tokio::spawn(async move {
             if let Err(e) = handle_connection(stream).await {
-                eprintln!("Error handling connection: {e}");
+                eprintln!("Error during connection handling: {:?}", e);
             }
         });
     }
