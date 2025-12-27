@@ -1,20 +1,23 @@
 #![allow(unused_imports)]
 use std::{
     borrow::Cow,
+    collections::HashMap,
     ffi::IntoStringError,
     io::{BufRead, BufReader, Error, Read, Write},
+    sync::Arc,
     thread,
 };
 
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    sync::RwLock,
 };
 
 use crate::parser::{RedisType, RespParseError, parse_resp};
 mod parser;
 
-fn handle_input(input: RedisType) -> Result<String, RespParseError> {
+async fn handle_input(input: RedisType, store: &SharedStore) -> Result<String, RespParseError> {
     let RedisType::Array(elements) = input else {
         unreachable!("parse_array must return RedisType::Array")
     };
@@ -40,6 +43,33 @@ fn handle_input(input: RedisType) -> Result<String, RespParseError> {
 
                     Ok(format!("${}\r\n{}\r\n", message.len(), message))
                 }
+                "GET" => {
+                    let key = match elements.get(1) {
+                        Some(RedisType::BulkString(value)) => value,
+                        _ => return Err(RespParseError::KeyNotFound),
+                    };
+                    let reader = store.read().await;
+                    let value = reader.get(key)?;
+
+                    Ok(format!("${}\r\n{}\r\n", value.len(), value))
+                }
+                "SET" => {
+                    if elements.len() != 3 {
+                        return Err(RespParseError::InvalidFormat);
+                    }
+                    let key = match elements.get(1) {
+                        Some(RedisType::BulkString(value)) => value,
+                        _ => return Err(RespParseError::KeyNotFound),
+                    };
+                    let value = match elements.get(2) {
+                        Some(RedisType::BulkString(value)) => value,
+                        _ => return Err(RespParseError::KeyNotFound),
+                    };
+                    let mut writer = store.write().await;
+                    writer.set(key, value)?;
+
+                    Ok("+OK\r\n".to_string())
+                }
                 _ => Err(RespParseError::InvalidFormat),
             }
         }
@@ -47,7 +77,10 @@ fn handle_input(input: RedisType) -> Result<String, RespParseError> {
     }
 }
 
-async fn handle_connection(mut stream: TcpStream) -> Result<(), RespParseError> {
+async fn handle_connection(
+    mut stream: TcpStream,
+    store: SharedStore,
+) -> Result<(), RespParseError> {
     let mut buffer = [0; 1024];
     loop {
         let read_length = stream.read(&mut buffer).await?;
@@ -66,12 +99,38 @@ async fn handle_connection(mut stream: TcpStream) -> Result<(), RespParseError> 
         println!("Received input: {:?}", input_str);
         let result = parse_resp(&buffer[0..read_length])?;
         println!("Parsed response: {:?}", result);
-        let response = handle_input(result)?;
+        let response = handle_input(result, &store).await?;
 
         stream.write_all(response.as_bytes()).await?
     }
     Ok(())
 }
+
+struct Store {
+    data: HashMap<String, String>,
+}
+
+impl Store {
+    fn new() -> Self {
+        Store {
+            data: HashMap::new(),
+        }
+    }
+
+    fn get(&self, key: &str) -> Result<String, RespParseError> {
+        self.data
+            .get(key)
+            .cloned()
+            .ok_or(RespParseError::KeyNotFound)
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> Result<(), RespParseError> {
+        self.data.insert(key.to_string(), value.to_string());
+        Ok(())
+    }
+}
+
+type SharedStore = Arc<RwLock<Store>>;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -80,13 +139,18 @@ async fn main() -> io::Result<()> {
 
     let tcp_listener = TcpListener::bind(&redis_address).await?;
 
+    // setting up the central data store (ARC at the moment / automate)
+    let store: SharedStore = Arc::new(RwLock::new(Store::new()));
+
     println!("Listening on {} - awaiting connections", redis_address);
     loop {
         let (stream, _addr) = tcp_listener.accept().await?;
         println!("Accepted connection from client");
 
+        let store = store.clone(); // this does not clone it (because it's an Arc type, it only increases the reference count)
+
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream).await {
+            if let Err(e) = handle_connection(stream, store).await {
                 eprintln!("Error during connection handling: {:?}", e);
             }
         });

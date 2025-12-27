@@ -11,6 +11,7 @@ pub enum RedisType {
 #[derive(Debug, PartialEq)]
 pub enum RespParseError {
     InvalidFormat,
+    KeyNotFound,
 }
 
 const CRLF: &[u8] = b"\r\n";
@@ -54,7 +55,6 @@ fn parse_array(input: &[u8]) -> Result<RedisType, RespParseError> {
     let mut elements: Vec<RedisType> = Vec::with_capacity(array_length);
     let mut pos: usize = 0;
     for &byte in array {
-        println!("processing character {}", byte as char);
         let element = match byte {
             b'+' => parse_simple_string(&array[pos..]),
             b'-' => parse_simple_error(&array[pos..]),
