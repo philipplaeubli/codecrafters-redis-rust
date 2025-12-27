@@ -55,6 +55,30 @@ impl Store {
         Ok(result.value.clone())
     }
 
+    pub fn lrange(
+        &self,
+        key: &str,
+        start: usize,
+        mut end: usize,
+    ) -> Result<Vec<String>, RespParseError> {
+        let list = self.lists.get(key).ok_or(RespParseError::KeyNotFound)?;
+        end = end + 1;
+        if start >= list.len() {
+            return Ok(vec![]);
+        }
+
+        if end >= list.len() {
+            end = list.len();
+        }
+
+        if start > end {
+            return Ok(vec![]);
+        }
+
+        let slice = &list.as_slice()[start..end];
+        Ok(slice.to_vec())
+    }
+
     pub fn set_with_expiry(
         &mut self,
         key: &str,

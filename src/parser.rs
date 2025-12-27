@@ -1,3 +1,5 @@
+use std::fmt;
+
 type ErrorKind = String;
 
 #[derive(Debug, PartialEq)]
@@ -20,6 +22,26 @@ const CRLF: &[u8] = b"\r\n";
 pub fn parse_resp(input: &[u8]) -> Result<RedisType, RespParseError> {
     // resp inputs are by definition arrays
     parse_array(input)
+}
+
+impl fmt::Display for RedisType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RedisType::SimpleString(value) => write!(formatter, "+{}\r\n", value),
+            RedisType::BulkString(value) => write!(formatter, "${}\r\n{}\r\n", value.len(), value),
+            RedisType::SimpleError(error_kind, error_message) => {
+                write!(formatter, "-{}{}\r\n", error_kind, error_message)
+            }
+            RedisType::Array(redis_types) => {
+                write!(formatter, "*{}\r\n", redis_types.len())?;
+                for redis_type in redis_types {
+                    write!(formatter, "{}", redis_type)?;
+                }
+                Ok(())
+            }
+            RedisType::None => write!(formatter, "_\r\n"),
+        }
+    }
 }
 
 // Happy path, if we encounter a Utf8Error, we assume that the input is invalid

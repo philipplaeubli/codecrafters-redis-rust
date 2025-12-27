@@ -3,6 +3,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     ffi::IntoStringError,
+    hash::RandomState,
     io::{BufRead, BufReader, Error, Read, Write},
     sync::Arc,
     thread,
@@ -41,10 +42,44 @@ async fn handle_input(input: RedisType, store: &SharedStore) -> Result<String, R
                             RedisType::BulkString(value) => value,
                             _ => "",
                         })
+                        .filter(|&s| !s.is_empty())
                         .collect::<Vec<&str>>()
                         .join(" ");
 
                     Ok(format!("${}\r\n{}\r\n", message.len(), message))
+                }
+
+                "LRANGE" => {
+                    let key = match elements.get(1) {
+                        Some(RedisType::BulkString(value)) => value,
+                        _ => return Err(RespParseError::InvalidFormat),
+                    };
+                    let start = match elements.get(2) {
+                        Some(RedisType::BulkString(value)) => value
+                            .parse::<usize>()
+                            .map_err(|_| RespParseError::InvalidFormat)?,
+                        _ => return Err(RespParseError::InvalidFormat),
+                    };
+                    let end = match elements.get(3) {
+                        Some(RedisType::BulkString(value)) => value
+                            .parse::<usize>()
+                            .map_err(|_| RespParseError::InvalidFormat)?,
+                        _ => return Err(RespParseError::InvalidFormat),
+                    };
+                    let reader = store.read().await;
+                    let result = reader.lrange(key, start, end);
+                    let response = if let Ok(values) = result {
+                        RedisType::Array(
+                            values
+                                .into_iter()
+                                .map(|v| RedisType::BulkString(v))
+                                .collect(),
+                        )
+                        .to_string()
+                    } else {
+                        RedisType::Array(vec![]).to_string()
+                    };
+                    Ok(response)
                 }
                 "RPUSH" => {
                     let key = match elements.get(1) {
@@ -60,7 +95,6 @@ async fn handle_input(input: RedisType, store: &SharedStore) -> Result<String, R
                         })
                         .filter(|val| !val.is_empty())
                         .collect::<Vec<String>>();
-                    println!("values: {:?}", values);
                     let mut writer = store.write().await;
                     let new_length = writer.rpush(key, values)?;
 
