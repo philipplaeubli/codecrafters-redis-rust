@@ -51,12 +51,18 @@ async fn handle_input(input: RedisType, store: &SharedStore) -> Result<String, R
                         Some(RedisType::BulkString(value)) => value,
                         _ => return Err(RespParseError::InvalidFormat),
                     };
-                    let value = match elements.get(2) {
-                        Some(RedisType::BulkString(value)) => value,
-                        _ => return Err(RespParseError::InvalidFormat),
-                    };
+
+                    let values = elements[2..]
+                        .iter()
+                        .map(|f| match f {
+                            RedisType::BulkString(value) => value.to_owned(),
+                            _ => "".to_owned(),
+                        })
+                        .filter(|val| !val.is_empty())
+                        .collect::<Vec<String>>();
+                    println!("values: {:?}", values);
                     let mut writer = store.write().await;
-                    let new_length = writer.rpush(key, value)?;
+                    let new_length = writer.rpush(key, values)?;
 
                     Ok(format!(":{}\r\n", new_length))
                 }

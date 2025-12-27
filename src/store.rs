@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    ops::Deref,
     sync::Arc,
     time::{SystemTime, SystemTimeError, UNIX_EPOCH},
 };
@@ -35,18 +36,10 @@ impl Store {
         }
     }
 
-    pub fn rpush(&mut self, key: &str, value: &str) -> Result<usize, RespParseError> {
-        if self.lists.contains_key(key) {
-            let list = self.lists.get_mut(key);
-            if let Some(list) = list {
-                list.push(value.to_string());
-                return Ok(list.len());
-            }
-        } else {
-            self.lists.insert(key.to_string(), vec![value.to_string()]);
-            return Ok(1);
-        }
-        Err(RespParseError::InvalidFormat) // TODO: improve error types
+    pub fn rpush(&mut self, key: &str, mut values: Vec<String>) -> Result<usize, RespParseError> {
+        let list = self.lists.entry(key.to_string()).or_default();
+        list.append(&mut values);
+        Ok(list.len())
     }
 
     pub fn get(&self, key: &str) -> Result<String, RespParseError> {
