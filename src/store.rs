@@ -14,7 +14,8 @@ pub struct StringWithExpiry {
 }
 
 pub struct Store {
-    data: HashMap<String, StringWithExpiry>,
+    keys: HashMap<String, StringWithExpiry>,
+    lists: HashMap<String, Vec<String>>,
 }
 
 pub type SharedStore = Arc<RwLock<Store>>;
@@ -29,12 +30,27 @@ impl From<SystemTimeError> for RespParseError {
 impl Store {
     pub fn new() -> Self {
         Store {
-            data: HashMap::new(),
+            keys: HashMap::new(),
+            lists: HashMap::new(),
         }
     }
 
+    pub fn rpush(&mut self, key: &str, value: &str) -> Result<usize, RespParseError> {
+        if self.lists.contains_key(key) {
+            let list = self.lists.get_mut(key);
+            if let Some(list) = list {
+                list.push(value.to_string());
+                return Ok(list.len());
+            }
+        } else {
+            self.lists.insert(key.to_string(), vec![value.to_string()]);
+            return Ok(1);
+        }
+        Err(RespParseError::InvalidFormat) // TODO: improve error types
+    }
+
     pub fn get(&self, key: &str) -> Result<String, RespParseError> {
-        let result = self.data.get(key).ok_or(RespParseError::KeyNotFound)?;
+        let result = self.keys.get(key).ok_or(RespParseError::KeyNotFound)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
 
         if let Some(expiry) = result.expires {
@@ -62,7 +78,7 @@ impl Store {
             value: value.to_string(),
             expires,
         };
-        self.data.insert(key.to_string(), key_value);
+        self.keys.insert(key.to_string(), key_value);
         Ok(())
     }
 }

@@ -46,6 +46,20 @@ async fn handle_input(input: RedisType, store: &SharedStore) -> Result<String, R
 
                     Ok(format!("${}\r\n{}\r\n", message.len(), message))
                 }
+                "RPUSH" => {
+                    let key = match elements.get(1) {
+                        Some(RedisType::BulkString(value)) => value,
+                        _ => return Err(RespParseError::InvalidFormat),
+                    };
+                    let value = match elements.get(2) {
+                        Some(RedisType::BulkString(value)) => value,
+                        _ => return Err(RespParseError::InvalidFormat),
+                    };
+                    let mut writer = store.write().await;
+                    let new_length = writer.rpush(key, value)?;
+
+                    Ok(format!(":{}\r\n", new_length))
+                }
                 "GET" => {
                     let key = match elements.get(1) {
                         Some(RedisType::BulkString(value)) => value,
