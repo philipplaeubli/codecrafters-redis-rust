@@ -14,9 +14,12 @@ use tokio::{
     sync::RwLock,
 };
 
-use crate::parser::{RedisType, RespParseError, parse_resp};
+use crate::{
+    parser::{RedisType, RespParseError, parse_resp},
+    store::{SharedStore, Store},
+};
 mod parser;
-
+mod store;
 async fn handle_input(input: RedisType, store: &SharedStore) -> Result<String, RespParseError> {
     let RedisType::Array(elements) = input else {
         unreachable!("parse_array must return RedisType::Array")
@@ -49,14 +52,19 @@ async fn handle_input(input: RedisType, store: &SharedStore) -> Result<String, R
                         _ => return Err(RespParseError::KeyNotFound),
                     };
                     let reader = store.read().await;
-                    let value = reader.get(key)?;
-
-                    Ok(format!("${}\r\n{}\r\n", value.len(), value))
+                    let value = reader.get(key);
+                    match value {
+                        Ok(value) => Ok(format!("${}\r\n{}\r\n", value.len(), value)),
+                        Err(RespParseError::KeyExpired) => Ok("$-1\r\n".to_string()), // we handle key expiration and return a null bulk string
+                        Err(error) => Err(error), // handle other errors somewhere else
+                    }
                 }
                 "SET" => {
-                    if elements.len() != 3 {
+                    if elements.len() != 3 && elements.len() != 5 {
+                        // either it's a simple set, or it's a set with an expiry
                         return Err(RespParseError::InvalidFormat);
                     }
+
                     let key = match elements.get(1) {
                         Some(RedisType::BulkString(value)) => value,
                         _ => return Err(RespParseError::KeyNotFound),
@@ -65,8 +73,28 @@ async fn handle_input(input: RedisType, store: &SharedStore) -> Result<String, R
                         Some(RedisType::BulkString(value)) => value,
                         _ => return Err(RespParseError::KeyNotFound),
                     };
+                    let mut expiry: Option<u128> = None;
+                    if elements.len() == 5 {
+                        let expiry_unit = match elements.get(3) {
+                            Some(RedisType::BulkString(value)) => value,
+                            _ => return Err(RespParseError::KeyNotFound),
+                        };
+
+                        let expiry_as_string = match elements.get(4) {
+                            Some(RedisType::BulkString(value)) => value,
+                            _ => return Err(RespParseError::KeyNotFound),
+                        };
+                        let expiry_value: u128 = expiry_as_string.parse::<u128>()?;
+                        let unit_factor = match expiry_unit.as_str() {
+                            "EX" => 1000,
+                            "PX" => 1,
+                            _ => return Err(RespParseError::InvalidFormat),
+                        };
+                        expiry = Some(expiry_value * unit_factor);
+                    }
+
                     let mut writer = store.write().await;
-                    writer.set(key, value)?;
+                    writer.set_with_expiry(key, value, expiry)?;
 
                     Ok("+OK\r\n".to_string())
                 }
@@ -106,32 +134,6 @@ async fn handle_connection(
     Ok(())
 }
 
-struct Store {
-    data: HashMap<String, String>,
-}
-
-impl Store {
-    fn new() -> Self {
-        Store {
-            data: HashMap::new(),
-        }
-    }
-
-    fn get(&self, key: &str) -> Result<String, RespParseError> {
-        self.data
-            .get(key)
-            .cloned()
-            .ok_or(RespParseError::KeyNotFound)
-    }
-
-    fn set(&mut self, key: &str, value: &str) -> Result<(), RespParseError> {
-        self.data.insert(key.to_string(), value.to_string());
-        Ok(())
-    }
-}
-
-type SharedStore = Arc<RwLock<Store>>;
-
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let redis_address =
@@ -139,7 +141,7 @@ async fn main() -> io::Result<()> {
 
     let tcp_listener = TcpListener::bind(&redis_address).await?;
 
-    // setting up the central data store (ARC at the moment / automate)
+    // setting up the central data store (ARC at the moment / automated referece counting)
     let store: SharedStore = Arc::new(RwLock::new(Store::new()));
 
     println!("Listening on {} - awaiting connections", redis_address);

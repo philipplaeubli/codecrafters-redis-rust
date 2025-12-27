@@ -12,6 +12,7 @@ pub enum RedisType {
 pub enum RespParseError {
     InvalidFormat,
     KeyNotFound,
+    KeyExpired,
 }
 
 const CRLF: &[u8] = b"\r\n";
