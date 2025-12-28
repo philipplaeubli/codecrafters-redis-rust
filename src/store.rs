@@ -76,6 +76,10 @@ impl Store {
             return Ok(vec![]);
         }
 
+        if start < 0 {
+            start = 0;
+        }
+
         if end >= list_length {
             end = list_length;
         }
