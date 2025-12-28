@@ -252,6 +252,23 @@ async fn handle_lrange(
     Ok(response.to_string())
 }
 
+async fn handle_llen(arguments: &[RedisType], store: &SharedStore) -> Result<String, CommandError> {
+    let key = match &arguments[0] {
+        RedisType::BulkString(value) => value.data.clone(),
+        _ => {
+            return Err(CommandError::InvalidInput(format!(
+                "First argument / key of LLEN must be a bulkstring"
+            )));
+        }
+    };
+    let mut reader = store.write().await; // Writes default value...
+    let len = reader
+        .llen(&key)
+        .map_err(|store_error| CommandError::StoreError(store_error))?;
+
+    Ok(format!(":{}\r\n", len.to_string()))
+}
+
 pub async fn handle_command(input: RedisType, store: &SharedStore) -> Result<String, CommandError> {
     let RedisType::Array(elements) = input else {
         return Err(CommandError::InvalidInput(
@@ -274,6 +291,7 @@ pub async fn handle_command(input: RedisType, store: &SharedStore) -> Result<Str
                 "LPUSH" => handle_lpush(arguments, store).await,
                 "GET" => handle_get(arguments, store).await,
                 "SET" => handle_set(arguments, store).await,
+                "LLEN" => handle_llen(arguments, store).await,
                 _ => Err(CommandError::UnknownCommand(format!("redis command {} not supported", command))),
             }
         }

@@ -125,6 +125,11 @@ impl Store {
         self.keys.insert(key.to_string(), key_value);
         Ok(())
     }
+
+    pub fn llen(&mut self, key: &str) -> Result<usize, StoreError> {
+        let list = self.lists.entry(key.to_string()).or_default();
+        Ok(list.len())
+    }
 }
 #[test]
 fn test_lpush() {
