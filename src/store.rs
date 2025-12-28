@@ -46,6 +46,13 @@ impl Store {
         Ok(list.len())
     }
 
+    pub fn lpush(&mut self, key: &str, mut values: Vec<String>) -> Result<usize, StoreError> {
+        let list = self.lists.entry(key.to_string()).or_default();
+        values.reverse(); // reverse the order of the values
+        list.splice(0..0, values); //  inserts all the values at the beginning of the list
+        Ok(list.len())
+    }
+
     pub fn get(&self, key: &str) -> Result<String, StoreError> {
         let result = self.keys.get(key).ok_or(StoreError::KeyNotFound)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
@@ -118,4 +125,28 @@ impl Store {
         self.keys.insert(key.to_string(), key_value);
         Ok(())
     }
+}
+#[test]
+fn test_lpush() {
+    let mut store = Store::new();
+
+    let _ = store.lpush("test", vec!["c".into(), "b".into(), "a".into()]);
+
+    let result = store.lrange("test", 0, -1).unwrap();
+    assert_eq!(
+        result,
+        vec!["a".to_string(), "b".to_string(), "c".to_string()]
+    );
+
+    let _ = store.lpush("test", vec!["d".into()]);
+    let result = store.lrange("test", 0, -1).unwrap();
+    assert_eq!(
+        result,
+        vec![
+            "d".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string()
+        ]
+    );
 }

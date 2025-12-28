@@ -85,7 +85,37 @@ async fn main() -> io::Result<()> {
 
         tokio::spawn(async move {
             if let Err(e) = handle_connection(stream, store).await {
-                eprintln!("Error during connection handling: {:?}", e);
+                // Handle errors here
+
+                match e {
+                    RedisError::ParseError(resp_parse_error) => match resp_parse_error {
+                        RespParseError::InvalidFormat => {
+                            eprintln!("Invalid format")
+                        }
+                    },
+                    RedisError::CommandError(command_error) => match command_error {
+                        CommandError::InvalidInput(message) => {
+                            eprintln!("Command Error - Invalid input: {}", message)
+                        }
+                        CommandError::UnknownCommand(message) => {
+                            eprintln!("Command Error - Unknown command: {}", message)
+                        }
+                        CommandError::StoreError(store_error) => match store_error {
+                            store::StoreError::KeyNotFound => {
+                                eprintln!("Store Error - Key not found")
+                            }
+                            store::StoreError::KeyExpired => {
+                                eprintln!("Store Error - Key expired")
+                            }
+                            store::StoreError::TimeError => {
+                                eprintln!("Store Error - Time conversion error")
+                            }
+                        },
+                    },
+                    RedisError::IoError(error) => {
+                        eprintln!("IO error: {:?}", error)
+                    }
+                }
             }
         });
     }

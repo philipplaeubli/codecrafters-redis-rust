@@ -1,4 +1,7 @@
-use std::fmt::format;
+use std::{
+    fmt::format,
+    sync::{Arc, RwLock},
+};
 
 use crate::{
     parser::{RedisData, RedisType, RespParseError},
@@ -11,18 +14,6 @@ pub enum CommandError {
     UnknownCommand(String),
     StoreError(StoreError),
 }
-
-// impl From<StoreError> for CommandError {
-//     fn from(error: StoreError) -> Self {
-//         match error {
-//             StoreError::KeyNotFound => CommandError::InvalidInput(format!("Key not found")),
-//             StoreError::TimeError => {
-//                 CommandError::InvalidInput(format!("Unable to convert expiry to unix timestamp"))
-//             }
-//             StoreError::KeyExpired => todo!(),
-//         }
-//     }
-// }
 
 fn handle_pong(arguments: &[RedisType]) -> Result<String, CommandError> {
     if !arguments.is_empty() {
@@ -171,6 +162,35 @@ async fn handle_rpush(
     Ok(format!(":{}\r\n", new_length))
 }
 
+async fn handle_lpush(
+    arguments: &[RedisType],
+    store: &SharedStore,
+) -> Result<String, CommandError> {
+    let key = match &arguments[0] {
+        RedisType::BulkString(value) => value.data.clone(),
+        _ => {
+            return Err(CommandError::InvalidInput(format!(
+                "First argument / key of LPUSH must be a bulkstring"
+            )));
+        }
+    };
+
+    let values = arguments[1..]
+        .iter()
+        .map(|f| match f {
+            RedisType::BulkString(value) => value.data.to_owned(),
+            _ => "".to_owned(),
+        })
+        .filter(|val| !val.is_empty())
+        .collect::<Vec<String>>();
+    let mut writer = store.write().await;
+    let new_length = writer
+        .lpush(key.as_str(), values)
+        .map_err(|store_error| CommandError::StoreError(store_error))?;
+
+    Ok(format!(":{}\r\n", new_length))
+}
+
 async fn handle_lrange(
     arguments: &[RedisType],
     store: &SharedStore,
@@ -251,6 +271,7 @@ pub async fn handle_command(input: RedisType, store: &SharedStore) -> Result<Str
                 "ECHO" => handle_echo(arguments),
                 "LRANGE" => handle_lrange(arguments, store).await,
                 "RPUSH" => handle_rpush(arguments, store).await,
+                "LPUSH" => handle_lpush(arguments, store).await,
                 "GET" => handle_get(arguments, store).await,
                 "SET" => handle_set(arguments, store).await,
                 _ => Err(CommandError::UnknownCommand(format!("redis command {} not supported", command))),
