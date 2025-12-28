@@ -7,8 +7,6 @@ use std::{
 
 use tokio::sync::RwLock;
 
-use crate::parser::RespParseError;
-
 pub struct StringWithExpiry {
     value: String,
     expires: Option<u128>,
@@ -19,12 +17,18 @@ pub struct Store {
     lists: HashMap<String, Vec<String>>,
 }
 
+#[derive(Debug)]
+pub enum StoreError {
+    KeyNotFound,
+    KeyExpired,
+    TimeError,
+}
+
 pub type SharedStore = Arc<RwLock<Store>>;
 
-// TODO: overhaul error handling
-impl From<SystemTimeError> for RespParseError {
+impl From<SystemTimeError> for StoreError {
     fn from(_err: SystemTimeError) -> Self {
-        RespParseError::InvalidFormat
+        StoreError::TimeError
     }
 }
 
@@ -36,19 +40,19 @@ impl Store {
         }
     }
 
-    pub fn rpush(&mut self, key: &str, mut values: Vec<String>) -> Result<usize, RespParseError> {
+    pub fn rpush(&mut self, key: &str, mut values: Vec<String>) -> Result<usize, StoreError> {
         let list = self.lists.entry(key.to_string()).or_default();
         list.append(&mut values);
         Ok(list.len())
     }
 
-    pub fn get(&self, key: &str) -> Result<String, RespParseError> {
-        let result = self.keys.get(key).ok_or(RespParseError::KeyNotFound)?;
+    pub fn get(&self, key: &str) -> Result<String, StoreError> {
+        let result = self.keys.get(key).ok_or(StoreError::KeyNotFound)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
 
         if let Some(expiry) = result.expires {
             if expiry < now {
-                return Err(RespParseError::KeyExpired);
+                return Err(StoreError::KeyExpired);
             }
         }
 
@@ -60,8 +64,8 @@ impl Store {
         key: &str,
         mut start: i128,
         mut end: i128,
-    ) -> Result<Vec<String>, RespParseError> {
-        let list = self.lists.get(key).ok_or(RespParseError::KeyNotFound)?;
+    ) -> Result<Vec<String>, StoreError> {
+        let list = self.lists.get(key).ok_or(StoreError::KeyNotFound)?;
         let list_length = list.len() as i128;
         if start < 0 {
             start = list_length + start;
@@ -100,7 +104,7 @@ impl Store {
         key: &str,
         value: &str,
         expiry: Option<u128>,
-    ) -> Result<(), RespParseError> {
+    ) -> Result<(), StoreError> {
         let mut expires: Option<u128> = None;
         if let Some(expiry) = expiry {
             let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();

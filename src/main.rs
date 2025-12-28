@@ -16,7 +16,7 @@ use tokio::{
 };
 
 use crate::{
-    commands::handle_command,
+    commands::{CommandError, handle_command},
     parser::{RedisData, RedisType, RespParseError, parse_resp},
     store::{SharedStore, Store},
 };
@@ -24,13 +24,20 @@ mod commands;
 mod parser;
 mod store;
 
-async fn handle_connection(
-    mut stream: TcpStream,
-    store: SharedStore,
-) -> Result<(), RespParseError> {
+#[derive(Debug)]
+enum RedisError {
+    ParseError(RespParseError),
+    CommandError(CommandError),
+    IoError(io::Error),
+}
+
+async fn handle_connection(mut stream: TcpStream, store: SharedStore) -> Result<(), RedisError> {
     let mut buffer = [0; 1024];
     loop {
-        let read_length = stream.read(&mut buffer).await?;
+        let read_length = stream
+            .read(&mut buffer)
+            .await
+            .map_err(|io_error| RedisError::IoError(io_error))?;
 
         if read_length == 0 {
             println!("Received empty input");
@@ -44,11 +51,17 @@ async fn handle_connection(
             }
         };
         println!("Received input: {:?}", input_str);
-        let result = parse_resp(&buffer[0..read_length])?;
+        let result =
+            parse_resp(&buffer[0..read_length]).map_err(|err| RedisError::ParseError(err))?;
         println!("Parsed response: {:?}", result);
-        let response = handle_command(result, &store).await?;
+        let response = handle_command(result, &store)
+            .await
+            .map_err(|command_error| RedisError::CommandError(command_error))?;
 
-        stream.write_all(response.as_bytes()).await?
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .map_err(|io_error| RedisError::IoError(io_error))?;
     }
     Ok(())
 }

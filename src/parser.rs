@@ -116,7 +116,8 @@ fn parse_array(input: &[u8]) -> Result<RedisType, RespParseError> {
             pos += 1;
         }
     }
-    let final_length = array_start_position + 1 + array.len();
+
+    let final_length = array_start_position + 1 + pos;
 
     Ok(RedisType::Array(RedisData {
         data: elements,
@@ -471,6 +472,47 @@ fn test_parse_array_large_string_array() {
                 }),
             ],
             buffer_length: buffer_length
+        }))
+    );
+}
+#[test]
+fn test_parse_array_nested_array() {
+    let inner_hello_len = b"$5\r\nhello\r\n".len();
+    let inner_world_len = b"$5\r\nworld\r\n".len();
+    let inner_array_len = b"*2\r\n$5\r\nhello\r\n$5\r\nworld\r\n".len();
+    let outer_foo_len = b"$3\r\nfoo\r\n".len();
+    let outer_bar_len = b"$3\r\nbar\r\n".len();
+
+    let input = b"*3\r\n$3\r\nfoo\r\n*2\r\n$5\r\nhello\r\n$5\r\nworld\r\n$3\r\nbar\r\n";
+    let len = input.len();
+
+    assert_eq!(
+        parse_array(input),
+        Ok(RedisType::Array(RedisData {
+            data: vec![
+                RedisType::BulkString(RedisData {
+                    data: "foo".into(),
+                    buffer_length: outer_foo_len,
+                }),
+                RedisType::Array(RedisData {
+                    data: vec![
+                        RedisType::BulkString(RedisData {
+                            data: "hello".into(),
+                            buffer_length: inner_hello_len,
+                        }),
+                        RedisType::BulkString(RedisData {
+                            data: "world".into(),
+                            buffer_length: inner_world_len,
+                        }),
+                    ],
+                    buffer_length: inner_array_len,
+                }),
+                RedisType::BulkString(RedisData {
+                    data: "bar".into(),
+                    buffer_length: outer_bar_len,
+                }),
+            ],
+            buffer_length: len
         }))
     );
 }
