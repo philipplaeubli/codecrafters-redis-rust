@@ -131,11 +131,12 @@ impl Store {
         Ok(list.len())
     }
 
-    pub fn lpop(&mut self, key: &str) -> Result<String, StoreError> {
+    pub fn lpop(&mut self, key: &str, amount: i128) -> Result<Vec<String>, StoreError> {
         let list = self.lists.entry(key.to_string()).or_default();
 
         if list.len() > 0 {
-            return Ok(list.remove(0));
+            let removed = list.drain(..amount as usize).collect();
+            return Ok(removed);
         }
 
         Err(StoreError::KeyNotFound)

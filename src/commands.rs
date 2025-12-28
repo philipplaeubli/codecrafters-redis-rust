@@ -244,10 +244,46 @@ fn extract_key(arguments: &[RedisType]) -> Result<String, CommandError> {
 
 async fn handle_lpop(arguments: &[RedisType], store: &SharedStore) -> Result<String, CommandError> {
     let key = extract_key(arguments)?;
+    let mut amount = 1;
+    if arguments.len() > 1 {
+        amount = match &arguments[1] {
+            RedisType::BulkString(value) => value.data.parse::<i128>().map_err(|_| {
+                CommandError::InvalidInput(format!("Amount must be a valid integer"))
+            })?,
+            _ => {
+                return Err(CommandError::InvalidInput(format!(
+                    "Amount must be an integer"
+                )));
+            }
+        };
+    }
     let mut writer = store.write().await;
-    let removed_element = writer.lpop(&key);
-    match removed_element {
-        Ok(element) => Ok(format!("${}\r\n{}\r\n", element.len(), element)),
+
+    let removed_elements = writer.lpop(&key, amount);
+    match removed_elements {
+        Ok(removed_elements) => {
+            if removed_elements.is_empty() {
+                Ok("$-1\r\n".to_string())
+            } else if removed_elements.len() == 1 {
+                let element = &removed_elements[0];
+                Ok(format!("${}\r\n{}\r\n", element.len(), element))
+            } else {
+                let resp = RedisType::Array(RedisData {
+                    data: removed_elements
+                        .into_iter()
+                        .map(|element| {
+                            RedisType::BulkString(RedisData {
+                                data: element.clone(),
+                                buffer_length: 0,
+                            })
+                        })
+                        .collect(),
+                    buffer_length: 0,
+                });
+
+                Ok(resp.to_string())
+            }
+        }
         Err(StoreError::KeyNotFound) => Ok("$-1\r\n".to_string()),
         Err(err) => Err(CommandError::StoreError(err)),
     }
