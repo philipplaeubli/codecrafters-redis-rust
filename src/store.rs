@@ -130,6 +130,16 @@ impl Store {
         let list = self.lists.entry(key.to_string()).or_default();
         Ok(list.len())
     }
+
+    pub fn lpop(&mut self, key: &str) -> Result<String, StoreError> {
+        let list = self.lists.entry(key.to_string()).or_default();
+
+        if list.len() > 0 {
+            return Ok(list.remove(0));
+        }
+
+        Err(StoreError::KeyNotFound)
+    }
 }
 #[test]
 fn test_lpush() {

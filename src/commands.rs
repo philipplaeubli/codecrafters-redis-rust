@@ -41,14 +41,8 @@ fn handle_echo(arguments: &[RedisType]) -> Result<String, CommandError> {
 }
 
 async fn handle_get(arguments: &[RedisType], store: &SharedStore) -> Result<String, CommandError> {
-    let key = match arguments.first() {
-        Some(RedisType::BulkString(value)) => value.data.clone(),
-        _ => {
-            return Err(CommandError::InvalidInput(format!(
-                "Key not found or not of correct type (must be BulkString)"
-            )));
-        }
-    };
+    let key = extract_key(arguments)?;
+
     let reader = store.read().await;
     let value = reader.get(key.as_str());
     match value {
@@ -69,14 +63,8 @@ async fn handle_set(arguments: &[RedisType], store: &SharedStore) -> Result<Stri
         )));
     }
 
-    let key = match &arguments[0] {
-        RedisType::BulkString(value) => value.data.clone(),
-        _ => {
-            return Err(CommandError::InvalidInput(format!(
-                "Invalid input: first argument of SET must be a key of type bulkstring"
-            )));
-        }
-    };
+    let key = extract_key(arguments)?;
+
     let value = match &arguments[1] {
         RedisType::BulkString(value) => value.data.clone(),
         _ => {
@@ -136,14 +124,7 @@ async fn handle_rpush(
     arguments: &[RedisType],
     store: &SharedStore,
 ) -> Result<String, CommandError> {
-    let key = match &arguments[0] {
-        RedisType::BulkString(value) => value.data.clone(),
-        _ => {
-            return Err(CommandError::InvalidInput(format!(
-                "First argument / key of RPUSH must be a bulkstring"
-            )));
-        }
-    };
+    let key = extract_key(arguments)?;
 
     let values = arguments[1..]
         .iter()
@@ -166,14 +147,7 @@ async fn handle_lpush(
     arguments: &[RedisType],
     store: &SharedStore,
 ) -> Result<String, CommandError> {
-    let key = match &arguments[0] {
-        RedisType::BulkString(value) => value.data.clone(),
-        _ => {
-            return Err(CommandError::InvalidInput(format!(
-                "First argument / key of LPUSH must be a bulkstring"
-            )));
-        }
-    };
+    let key = extract_key(arguments)?;
 
     let values = arguments[1..]
         .iter()
@@ -195,14 +169,7 @@ async fn handle_lrange(
     arguments: &[RedisType],
     store: &SharedStore,
 ) -> Result<String, CommandError> {
-    let key = match &arguments[0] {
-        RedisType::BulkString(value) => value.data.clone(),
-        _ => {
-            return Err(CommandError::InvalidInput(format!(
-                "First argument / key of LRANGE must be a bulkstring"
-            )));
-        }
-    };
+    let key = extract_key(arguments)?;
 
     let start = match &arguments[1] {
         RedisType::BulkString(value) => value.data.parse::<i128>().map_err(|_| {
@@ -253,20 +220,37 @@ async fn handle_lrange(
 }
 
 async fn handle_llen(arguments: &[RedisType], store: &SharedStore) -> Result<String, CommandError> {
-    let key = match &arguments[0] {
-        RedisType::BulkString(value) => value.data.clone(),
-        _ => {
-            return Err(CommandError::InvalidInput(format!(
-                "First argument / key of LLEN must be a bulkstring"
-            )));
-        }
-    };
-    let mut reader = store.write().await; // Writes default value...
-    let len = reader
+    let key = extract_key(arguments)?;
+
+    let mut writer = store.write().await; // Writes default value...
+    let len = writer
         .llen(&key)
         .map_err(|store_error| CommandError::StoreError(store_error))?;
 
     Ok(format!(":{}\r\n", len.to_string()))
+}
+
+fn extract_key(arguments: &[RedisType]) -> Result<String, CommandError> {
+    let key = match &arguments[0] {
+        RedisType::BulkString(value) => value.data.clone(),
+        _ => {
+            return Err(CommandError::InvalidInput(format!(
+                "Key must be a bulkstring"
+            )));
+        }
+    };
+    Ok(key)
+}
+
+async fn handle_lpop(arguments: &[RedisType], store: &SharedStore) -> Result<String, CommandError> {
+    let key = extract_key(arguments)?;
+    let mut writer = store.write().await;
+    let removed_element = writer.lpop(&key);
+    match removed_element {
+        Ok(element) => Ok(format!("${}\r\n{}\r\n", element.len(), element)),
+        Err(StoreError::KeyNotFound) => Ok("$-1\r\n".to_string()),
+        Err(err) => Err(CommandError::StoreError(err)),
+    }
 }
 
 pub async fn handle_command(input: RedisType, store: &SharedStore) -> Result<String, CommandError> {
@@ -292,6 +276,7 @@ pub async fn handle_command(input: RedisType, store: &SharedStore) -> Result<Str
                 "GET" => handle_get(arguments, store).await,
                 "SET" => handle_set(arguments, store).await,
                 "LLEN" => handle_llen(arguments, store).await,
+                "LPOP" => handle_lpop(arguments, store).await,
                 _ => Err(CommandError::UnknownCommand(format!("redis command {} not supported", command))),
             }
         }
