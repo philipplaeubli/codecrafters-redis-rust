@@ -58,24 +58,36 @@ impl Store {
     pub fn lrange(
         &self,
         key: &str,
-        start: usize,
-        mut end: usize,
+        mut start: i128,
+        mut end: i128,
     ) -> Result<Vec<String>, RespParseError> {
         let list = self.lists.get(key).ok_or(RespParseError::KeyNotFound)?;
+        let list_length = list.len() as i128;
+        if start < 0 {
+            start = list_length + start;
+        }
+        if end < 0 {
+            end = list_length + end;
+        }
+
         end = end + 1;
-        if start >= list.len() {
+
+        if start >= list_length {
             return Ok(vec![]);
         }
 
-        if end >= list.len() {
-            end = list.len();
+        if end >= list_length {
+            end = list_length;
         }
 
         if start > end {
             return Ok(vec![]);
         }
 
-        let slice = &list.as_slice()[start..end];
+        let start_pos = start as usize;
+        let end_pos = end as usize;
+
+        let slice = &list.as_slice()[start_pos..end_pos];
         Ok(slice.to_vec())
     }
 
