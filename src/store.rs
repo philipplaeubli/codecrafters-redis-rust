@@ -1,23 +1,19 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     ops::Deref,
     sync::Arc,
     time::{SystemTime, SystemTimeError, UNIX_EPOCH},
 };
 
 use bytes::{Bytes, BytesMut};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, oneshot};
+
+use crate::{RedisMessage, parser::RedisType};
 
 pub struct WithExpiry {
     value: Bytes,
     expires: Option<u128>,
 }
-
-pub struct Store {
-    keys: HashMap<Bytes, WithExpiry>,
-    lists: HashMap<Bytes, Vec<Bytes>>,
-}
-
 #[derive(Debug)]
 pub enum StoreError {
     KeyNotFound,
@@ -30,18 +26,39 @@ impl From<SystemTimeError> for StoreError {
         StoreError::TimeError
     }
 }
+pub struct Store {
+    keys: HashMap<Bytes, WithExpiry>,
+    lists: HashMap<Bytes, Vec<Bytes>>,
+    blpop_queue: HashMap<Bytes, VecDeque<oneshot::Sender<RedisType>>>,
+}
 
 impl Store {
     pub fn new() -> Self {
         Store {
             keys: HashMap::new(),
             lists: HashMap::new(),
+            blpop_queue: HashMap::new(),
         }
     }
 
-    pub fn rpush(&mut self, key: Bytes, mut values: Vec<Bytes>) -> Result<usize, StoreError> {
-        let list = self.lists.entry(key).or_default();
-        list.append(&mut values);
+    pub fn rpush(&mut self, key: Bytes, values: Vec<Bytes>) -> Result<usize, StoreError> {
+        let list = self.lists.entry(key.clone()).or_default();
+        list.append(&mut values.clone());
+
+        if let Some(q) = self.blpop_queue.get_mut(&key.clone()) {
+            if let Some(reply) = q.pop_front() {
+                // Reply with an array [key, value] like Redis BLPOP
+                let mut response: Vec<RedisType> = values
+                    .iter()
+                    .map(|v| RedisType::BulkString(v.clone()))
+                    .collect();
+                println!("PREPARED RESPONSE 1 {:?}", response);
+                response.insert(0, RedisType::BulkString(key.clone()));
+                println!("PREPARED RESPONSE 2 {:?}", response);
+                let _ = reply.send(RedisType::Array(response));
+            }
+        }
+
         Ok(list.len())
     }
 
@@ -136,6 +153,21 @@ impl Store {
         }
 
         Err(StoreError::KeyNotFound)
+    }
+    /// Pops from list if available, returns the values
+    pub fn lpop_for_blpop(&mut self, key: &Bytes) -> Option<Vec<Bytes>> {
+        let list = self.lists.get_mut(key)?;
+        if list.is_empty() {
+            return None;
+        }
+        let mut removed: Vec<Bytes> = list.drain(..1).collect();
+        removed.insert(0, key.clone());
+        Some(removed)
+    }
+
+    /// Registers a blocked client waiting for data on this key
+    pub fn register_blocked_client(&mut self, key: Bytes, sender: oneshot::Sender<RedisType>) {
+        self.blpop_queue.entry(key).or_default().push_back(sender);
     }
 }
 #[test]

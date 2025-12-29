@@ -5,8 +5,10 @@ use std::{
 };
 
 use bytes::Bytes;
+use tokio::sync::oneshot;
 
 use crate::{
+    RedisMessage,
     parser::{RedisType, RespParseError},
     store::{Store, StoreError},
 };
@@ -196,6 +198,32 @@ async fn handle_lpop(
     }
 }
 
+async fn handle_blpop(
+    arguments: &[RedisType],
+    store: &mut Store,
+    sender: oneshot::Sender<RedisType>,
+) -> Result<(), CommandError> {
+    let key = extract_key(arguments)?;
+    let _timeout: u128 = argument_as_number(arguments, 1)?;
+
+    // Check if data available first
+    if let Some(values) = store.lpop_for_blpop(key) {
+        // Data available - send immediately
+        let response = RedisType::Array(
+            values
+                .into_iter()
+                .map(|element| RedisType::BulkString(element))
+                .collect(),
+        );
+        let _ = sender.send(response);
+        return Ok(());
+    }
+
+    // No data - register for waiting
+    store.register_blocked_client(key.clone(), sender);
+    Ok(())
+}
+
 fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, CommandError> {
     let bytes = match arguments.get(index) {
         Some(RedisType::BulkString(b)) => b,
@@ -238,7 +266,8 @@ where
 pub async fn handle_command(
     input: RedisType,
     store: &mut Store,
-) -> Result<RedisType, CommandError> {
+    sender: oneshot::Sender<RedisType>,
+) -> Result<(), CommandError> {
     let RedisType::Array(elements) = input else {
         return Err(CommandError::InvalidInput(
             "The supplied input has an invalid format or redis type: Input needs to be of RedisType::Array".to_string(),
@@ -248,7 +277,22 @@ pub async fn handle_command(
     let command = argument_as_str(&elements, 0)?.to_ascii_uppercase();
 
     let arguments = &elements[1..];
-    match command.as_str() {
+
+    // Handle BLPOP separately since it takes ownership of sender
+    if command == "BLPOP" {
+        let result = handle_blpop(arguments, store, sender).await;
+        return match result {
+            Ok(_response) => Ok(()), // Response already sent by blpop if immediate
+            Err(err) => match err {
+                CommandError::StoreError(StoreError::KeyNotFound | StoreError::KeyExpired) => {
+                    Ok(()) // Waiting - sender stored in queue, don't respond yet
+                }
+                _ => Err(err),
+            },
+        };
+    }
+
+    let result = match command.as_str() {
         "PING" => handle_pong(arguments),
         "ECHO" => handle_echo(arguments),
         "LRANGE" => handle_lrange(arguments, store).await,
@@ -258,9 +302,13 @@ pub async fn handle_command(
         "SET" => handle_set(arguments, store).await,
         "LLEN" => handle_llen(arguments, store).await,
         "LPOP" => handle_lpop(arguments, store).await,
+
         _ => Err(CommandError::UnknownCommand(format!(
             "redis command {} not supported",
             command
         ))),
-    }
+    };
+    result.map(|response| {
+        let _ = sender.send(response);
+    })
 }

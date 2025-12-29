@@ -94,9 +94,9 @@ async fn main() -> io::Result<()> {
 
         while let Some(cmd) = rx.recv().await {
             println!("Received command: {:?}", cmd);
-            let response = handle_command(cmd.message, &mut store).await.unwrap();
-
-            let _ = cmd.reply.send(response);
+            let _ = handle_command(cmd.message, &mut store, cmd.reply)
+                .await
+                .unwrap();
         }
     });
 
