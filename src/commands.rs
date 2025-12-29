@@ -8,7 +8,7 @@ use bytes::Bytes;
 
 use crate::{
     parser::{RedisType, RespParseError},
-    store::{SharedStore, Store, StoreError},
+    store::{Store, StoreError},
 };
 
 #[derive(Debug)]
@@ -34,14 +34,10 @@ fn handle_echo(arguments: &[RedisType]) -> Result<RedisType, CommandError> {
     }
 }
 
-async fn handle_get(
-    arguments: &[RedisType],
-    store: &SharedStore,
-) -> Result<RedisType, CommandError> {
+async fn handle_get(arguments: &[RedisType], store: &Store) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
-    let reader = store.read().await;
-    let value = reader.get(key.clone());
+    let value = store.get(key.clone());
     match value {
         Ok(value) => Ok(RedisType::BulkString(value.clone())),
         Err(StoreError::KeyExpired) => Ok(RedisType::NullBulkString), // we handle key expiration and return a null bulk string
@@ -52,10 +48,7 @@ async fn handle_get(
     }
 }
 
-async fn handle_set(
-    arguments: &[RedisType],
-    store: &SharedStore,
-) -> Result<RedisType, CommandError> {
+async fn handle_set(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
     if arguments.len() != 2 && arguments.len() != 4 {
         // either it's a simple SET, or it's a SET with an expiry
         return Err(CommandError::InvalidInput(format!(
@@ -83,8 +76,7 @@ async fn handle_set(
         expiry = Some(expiry_value * unit_factor);
     }
 
-    let mut writer = store.write().await;
-    writer
+    store
         .set_with_expiry(key.clone(), value.clone(), expiry)
         .map_err(|store_error| match store_error {
             StoreError::TimeError => {
@@ -97,7 +89,7 @@ async fn handle_set(
 
 async fn handle_rpush(
     arguments: &[RedisType],
-    store: &SharedStore,
+    store: &mut Store,
 ) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
@@ -109,8 +101,7 @@ async fn handle_rpush(
         })
         .collect::<Vec<Bytes>>();
 
-    let mut writer = store.write().await;
-    let new_length = writer
+    let new_length = store
         .rpush(key.clone(), values)
         .map_err(|store_error| CommandError::StoreError(store_error))?;
 
@@ -119,7 +110,7 @@ async fn handle_rpush(
 
 async fn handle_lpush(
     arguments: &[RedisType],
-    store: &SharedStore,
+    store: &mut Store,
 ) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
@@ -130,24 +121,19 @@ async fn handle_lpush(
             _ => None,
         })
         .collect::<Vec<Bytes>>();
-    let mut writer = store.write().await;
-    let new_length = writer
+    let new_length = store
         .lpush(key.clone(), values)
         .map_err(|store_error| CommandError::StoreError(store_error))?;
 
     Ok(RedisType::Integer(new_length as i128))
 }
 
-async fn handle_lrange(
-    arguments: &[RedisType],
-    store: &SharedStore,
-) -> Result<RedisType, CommandError> {
+async fn handle_lrange(arguments: &[RedisType], store: &Store) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
     let start: i128 = argument_as_number(arguments, 1)?;
     let end: i128 = argument_as_number(arguments, 2)?;
 
-    let reader = store.read().await;
-    let result = reader.lrange(key.clone(), start, end);
+    let result = store.lrange(key.clone(), start, end);
 
     let response = if let Ok(values) = result {
         RedisType::Array(
@@ -164,12 +150,11 @@ async fn handle_lrange(
 
 async fn handle_llen(
     arguments: &[RedisType],
-    store: &SharedStore,
+    store: &mut Store,
 ) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
-    let mut writer = store.write().await; // Writes default value...
-    let len = writer
+    let len = store
         .llen(key.clone())
         .map_err(|store_error| CommandError::StoreError(store_error))?;
 
@@ -178,7 +163,7 @@ async fn handle_llen(
 
 async fn handle_lpop(
     arguments: &[RedisType],
-    store: &SharedStore,
+    store: &mut Store,
 ) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
     let mut amount = 1;
@@ -186,9 +171,8 @@ async fn handle_lpop(
     if arguments.len() > 1 {
         amount = argument_as_number(arguments, 1)?;
     }
-    let mut writer = store.write().await;
 
-    let removed_elements = writer.lpop(key.clone(), amount);
+    let removed_elements = store.lpop(key.clone(), amount);
 
     match removed_elements {
         Ok(removed_elements) => {
@@ -253,7 +237,7 @@ where
 
 pub async fn handle_command(
     input: RedisType,
-    store: &SharedStore,
+    store: &mut Store,
 ) -> Result<RedisType, CommandError> {
     let RedisType::Array(elements) = input else {
         return Err(CommandError::InvalidInput(

@@ -25,8 +25,6 @@ pub enum StoreError {
     TimeError,
 }
 
-pub type SharedStore = Arc<RwLock<Store>>;
-
 impl From<SystemTimeError> for StoreError {
     fn from(_err: SystemTimeError) -> Self {
         StoreError::TimeError
