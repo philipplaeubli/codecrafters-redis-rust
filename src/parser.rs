@@ -10,7 +10,6 @@ pub enum RedisType {
     NullBulkString,
     SimpleError(Bytes),
     Array(Vec<RedisType>),
-    Null,
 }
 #[derive(Debug, PartialEq)]
 pub enum RespParseError {
@@ -57,9 +56,6 @@ impl RedisType {
                 for item in items {
                     item.encode(out);
                 }
-            }
-            RedisType::Null => {
-                out.extend_from_slice(b"$-1\r\n");
             }
             RedisType::NullBulkString => {
                 out.extend_from_slice(b"$-1\r\n");
@@ -113,7 +109,7 @@ fn parse_array(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
             b'-' => parse_simple_error(buffer),
             b'$' => parse_bulk_string(buffer),
             b'*' => parse_array(buffer),
-            _ => Ok(RedisType::Null),
+            _ => Ok(RedisType::NullBulkString),
         };
 
         if let Ok(element) = element {
