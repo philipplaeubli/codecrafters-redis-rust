@@ -47,14 +47,11 @@ impl Store {
 
         if let Some(q) = self.blpop_queue.get_mut(&key.clone()) {
             if let Some(reply) = q.pop_front() {
-                // Reply with an array [key, value] like Redis BLPOP
                 let mut response: Vec<RedisType> = values
                     .iter()
                     .map(|v| RedisType::BulkString(v.clone()))
                     .collect();
-                println!("PREPARED RESPONSE 1 {:?}", response);
                 response.insert(0, RedisType::BulkString(key.clone()));
-                println!("PREPARED RESPONSE 2 {:?}", response);
                 let _ = reply.send(RedisType::Array(response));
             }
         }
