@@ -1,10 +1,13 @@
 use std::{
     fmt::format,
+    str::FromStr,
     sync::{Arc, RwLock},
 };
 
+use bytes::Bytes;
+
 use crate::{
-    parser::{RedisData, RedisType, RespParseError},
+    parser::{RedisType, RespParseError},
     store::{SharedStore, Store, StoreError},
 };
 
@@ -15,47 +18,44 @@ pub enum CommandError {
     StoreError(StoreError),
 }
 
-fn handle_pong(arguments: &[RedisType]) -> Result<String, CommandError> {
+fn handle_pong(arguments: &[RedisType]) -> Result<RedisType, CommandError> {
     if !arguments.is_empty() {
         // as per https://redis.io/docs/latest/commands/ping/, ping should return the arguments passed to it
         return handle_echo(arguments);
     }
-    Ok("+PONG\r\n".to_string())
+    Ok(RedisType::SimpleString(Bytes::from_static(b"PONG")))
 }
 
-fn handle_echo(arguments: &[RedisType]) -> Result<String, CommandError> {
-    let message = arguments
-        .iter()
-        .map(|f| match f {
-            RedisType::BulkString(value) => value.data.clone(),
-            _ => "".to_string(),
-        })
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<String>>()
-        .join(" ");
-    let result = RedisType::BulkString(RedisData {
-        data: message,
-        buffer_length: 0,
-    });
-    Ok(result.to_string())
+fn handle_echo(arguments: &[RedisType]) -> Result<RedisType, CommandError> {
+    let message = arguments.first();
+    match message {
+        Some(RedisType::BulkString(value)) => Ok(RedisType::BulkString(value.clone())),
+        _ => Ok(RedisType::SimpleString(Bytes::from_static(b""))),
+    }
 }
 
-async fn handle_get(arguments: &[RedisType], store: &SharedStore) -> Result<String, CommandError> {
+async fn handle_get(
+    arguments: &[RedisType],
+    store: &SharedStore,
+) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
     let reader = store.read().await;
-    let value = reader.get(key.as_str());
+    let value = reader.get(key.clone());
     match value {
-        Ok(value) => Ok(format!("${}\r\n{}\r\n", value.len(), value)),
-        Err(StoreError::KeyExpired) => Ok("$-1\r\n".to_string()), // we handle key expiration and return a null bulk string
-        Err(StoreError::KeyNotFound) => Ok("$-1\r\n".to_string()),
+        Ok(value) => Ok(RedisType::BulkString(value.clone())),
+        Err(StoreError::KeyExpired) => Ok(RedisType::NullBulkString), // we handle key expiration and return a null bulk string
+        Err(StoreError::KeyNotFound) => Ok(RedisType::NullBulkString),
         Err(StoreError::TimeError) => Err(CommandError::InvalidInput(format!(
             "Unable to convert expiry to unix timestamp"
         ))),
     }
 }
 
-async fn handle_set(arguments: &[RedisType], store: &SharedStore) -> Result<String, CommandError> {
+async fn handle_set(
+    arguments: &[RedisType],
+    store: &SharedStore,
+) -> Result<RedisType, CommandError> {
     if arguments.len() != 2 && arguments.len() != 4 {
         // either it's a simple SET, or it's a SET with an expiry
         return Err(CommandError::InvalidInput(format!(
@@ -64,38 +64,14 @@ async fn handle_set(arguments: &[RedisType], store: &SharedStore) -> Result<Stri
     }
 
     let key = extract_key(arguments)?;
+    let value = argument_as_bytes(arguments, 1)?;
 
-    let value = match &arguments[1] {
-        RedisType::BulkString(value) => value.data.clone(),
-        _ => {
-            return Err(CommandError::InvalidInput(format!(
-                "Invalid input: second argument of SET must be a value of type bulkstring"
-            )));
-        }
-    };
     let mut expiry: Option<u128> = None;
     if arguments.len() == 4 {
-        let expiry_unit = match &arguments[2] {
-            RedisType::BulkString(value) => value.data.clone(),
-            _ => {
-                return Err(CommandError::InvalidInput(format!(
-                    "Invalid input: expiry unit of SET must be a bulkstring"
-                )));
-            }
-        };
+        let expiry_unit = argument_as_str(&arguments, 2)?;
+        let expiry_value: u128 = argument_as_number(&arguments, 3)?;
 
-        let expiry_as_string = match &arguments[3] {
-            RedisType::BulkString(value) => value.data.clone(),
-            _ => {
-                return Err(CommandError::InvalidInput(format!(
-                    "Invalid input: expiry value of SET must be a bulkstring"
-                )));
-            }
-        };
-        let expiry_value: u128 = expiry_as_string.parse::<u128>().map_err(|_| {
-            CommandError::InvalidInput(format!("Unable to parse expiry to a number"))
-        })?;
-        let unit_factor = match expiry_unit.as_str() {
+        let unit_factor = match expiry_unit {
             "EX" => 1000,
             "PX" => 1,
             _ => {
@@ -109,215 +85,198 @@ async fn handle_set(arguments: &[RedisType], store: &SharedStore) -> Result<Stri
 
     let mut writer = store.write().await;
     writer
-        .set_with_expiry(key.as_str(), value.as_str(), expiry)
+        .set_with_expiry(key.clone(), value.clone(), expiry)
         .map_err(|store_error| match store_error {
             StoreError::TimeError => {
                 CommandError::InvalidInput(format!("Unable to convert expiry to unix timestamp"))
             }
             _ => CommandError::StoreError(store_error),
         })?;
-
-    Ok("+OK\r\n".to_string())
+    Ok(RedisType::SimpleString(Bytes::from_static(b"OK")))
 }
 
 async fn handle_rpush(
     arguments: &[RedisType],
     store: &SharedStore,
-) -> Result<String, CommandError> {
+) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
     let values = arguments[1..]
         .iter()
-        .map(|f| match f {
-            RedisType::BulkString(value) => value.data.to_owned(),
-            _ => "".to_owned(),
+        .filter_map(|arg| match arg {
+            RedisType::BulkString(value) => Some(value.clone()),
+            _ => None,
         })
-        .filter(|val| !val.is_empty())
-        .collect::<Vec<String>>();
+        .collect::<Vec<Bytes>>();
 
     let mut writer = store.write().await;
     let new_length = writer
-        .rpush(key.as_str(), values)
+        .rpush(key.clone(), values)
         .map_err(|store_error| CommandError::StoreError(store_error))?;
 
-    Ok(format!(":{}\r\n", new_length))
+    Ok(RedisType::Integer(new_length as i128))
 }
 
 async fn handle_lpush(
     arguments: &[RedisType],
     store: &SharedStore,
-) -> Result<String, CommandError> {
+) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
     let values = arguments[1..]
         .iter()
-        .map(|f| match f {
-            RedisType::BulkString(value) => value.data.to_owned(),
-            _ => "".to_owned(),
+        .filter_map(|arg| match arg {
+            RedisType::BulkString(value) => Some(value.clone()),
+            _ => None,
         })
-        .filter(|val| !val.is_empty())
-        .collect::<Vec<String>>();
+        .collect::<Vec<Bytes>>();
     let mut writer = store.write().await;
     let new_length = writer
-        .lpush(key.as_str(), values)
+        .lpush(key.clone(), values)
         .map_err(|store_error| CommandError::StoreError(store_error))?;
 
-    Ok(format!(":{}\r\n", new_length))
+    Ok(RedisType::Integer(new_length as i128))
 }
 
 async fn handle_lrange(
     arguments: &[RedisType],
     store: &SharedStore,
-) -> Result<String, CommandError> {
+) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
+    let start: i128 = argument_as_number(arguments, 1)?;
+    let end: i128 = argument_as_number(arguments, 2)?;
 
-    let start = match &arguments[1] {
-        RedisType::BulkString(value) => value.data.parse::<i128>().map_err(|_| {
-            CommandError::InvalidInput(format!(
-                "Unable to convert start/from argument of LRANGE to number"
-            ))
-        })?,
-        _ => {
-            return Err(CommandError::InvalidInput(format!(
-                "Start/from argument of LRANGE must be a bulkstring"
-            )));
-        }
-    };
-    let end = match &arguments[2] {
-        RedisType::BulkString(value) => value.data.parse::<i128>().map_err(|_| {
-            CommandError::InvalidInput(format!(
-                "Unable to convert end/to argument of LRANGE to number"
-            ))
-        })?,
-        _ => {
-            return Err(CommandError::InvalidInput(format!(
-                "End/to argument of LRANGE must be a bulkstring"
-            )));
-        }
-    };
     let reader = store.read().await;
-    let result = reader.lrange(key.as_str(), start, end);
+    let result = reader.lrange(key.clone(), start, end);
+
     let response = if let Ok(values) = result {
-        RedisType::Array(RedisData {
-            data: values
+        RedisType::Array(
+            values
                 .into_iter()
-                .map(|v| {
-                    RedisType::BulkString(RedisData {
-                        data: v,
-                        buffer_length: 0,
-                    })
-                })
+                .map(|v| RedisType::BulkString(v))
                 .collect(),
-            buffer_length: 0,
-        })
+        )
     } else {
-        RedisType::Array(RedisData {
-            data: vec![],
-            buffer_length: 0,
-        })
+        RedisType::Array(vec![])
     };
-    Ok(response.to_string())
+    Ok(response)
 }
 
-async fn handle_llen(arguments: &[RedisType], store: &SharedStore) -> Result<String, CommandError> {
+async fn handle_llen(
+    arguments: &[RedisType],
+    store: &SharedStore,
+) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
     let mut writer = store.write().await; // Writes default value...
     let len = writer
-        .llen(&key)
+        .llen(key.clone())
         .map_err(|store_error| CommandError::StoreError(store_error))?;
 
-    Ok(format!(":{}\r\n", len.to_string()))
+    Ok(RedisType::Integer(len as i128))
 }
 
-fn extract_key(arguments: &[RedisType]) -> Result<String, CommandError> {
-    let key = match &arguments[0] {
-        RedisType::BulkString(value) => value.data.clone(),
-        _ => {
-            return Err(CommandError::InvalidInput(format!(
-                "Key must be a bulkstring"
-            )));
-        }
-    };
-    Ok(key)
-}
-
-async fn handle_lpop(arguments: &[RedisType], store: &SharedStore) -> Result<String, CommandError> {
+async fn handle_lpop(
+    arguments: &[RedisType],
+    store: &SharedStore,
+) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
     let mut amount = 1;
+
     if arguments.len() > 1 {
-        amount = match &arguments[1] {
-            RedisType::BulkString(value) => value.data.parse::<i128>().map_err(|_| {
-                CommandError::InvalidInput(format!("Amount must be a valid integer"))
-            })?,
-            _ => {
-                return Err(CommandError::InvalidInput(format!(
-                    "Amount must be an integer"
-                )));
-            }
-        };
+        amount = argument_as_number(arguments, 1)?;
     }
     let mut writer = store.write().await;
 
-    let removed_elements = writer.lpop(&key, amount);
+    let removed_elements = writer.lpop(key.clone(), amount);
+
     match removed_elements {
         Ok(removed_elements) => {
             if removed_elements.is_empty() {
-                Ok("$-1\r\n".to_string())
+                Ok(RedisType::NullBulkString)
             } else if removed_elements.len() == 1 {
                 let element = &removed_elements[0];
-                Ok(format!("${}\r\n{}\r\n", element.len(), element))
+                Ok(RedisType::BulkString(element.clone()))
             } else {
-                let resp = RedisType::Array(RedisData {
-                    data: removed_elements
+                let resp = RedisType::Array(
+                    removed_elements
                         .into_iter()
-                        .map(|element| {
-                            RedisType::BulkString(RedisData {
-                                data: element.clone(),
-                                buffer_length: 0,
-                            })
-                        })
+                        .map(|element| RedisType::BulkString(element.clone()))
                         .collect(),
-                    buffer_length: 0,
-                });
-
-                Ok(resp.to_string())
+                );
+                Ok(resp)
             }
         }
-        Err(StoreError::KeyNotFound) => Ok("$-1\r\n".to_string()),
+        Err(StoreError::KeyNotFound) => Ok(RedisType::NullBulkString),
         Err(err) => Err(CommandError::StoreError(err)),
     }
 }
 
-pub async fn handle_command(input: RedisType, store: &SharedStore) -> Result<String, CommandError> {
+fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, CommandError> {
+    let bytes = match arguments.get(index) {
+        Some(RedisType::BulkString(b)) => b,
+        Some(RedisType::SimpleString(b)) => b,
+        _ => {
+            return Err(CommandError::InvalidInput(format!(
+                "Invalid argument: Must be a bulkstring"
+            )));
+        }
+    };
+    Ok(bytes)
+}
+fn extract_key(arguments: &[RedisType]) -> Result<&Bytes, CommandError> {
+    argument_as_bytes(arguments, 0)
+}
+fn argument_as_str(arguments: &[RedisType], index: usize) -> Result<&str, CommandError> {
+    let bytes = match arguments.get(index) {
+        Some(RedisType::BulkString(b)) => b,
+        _ => {
+            return Err(CommandError::InvalidInput(format!(
+                "Invalid argument: Must be a bulkstring"
+            )));
+        }
+    };
+
+    str::from_utf8(bytes).map_err(|_| {
+        CommandError::InvalidInput(format!("Invalid argument: Must be a valid UTF-8 string"))
+    })
+}
+
+fn argument_as_number<T>(arguments: &[RedisType], index: usize) -> Result<T, CommandError>
+where
+    T: FromStr,
+{
+    let s = argument_as_str(arguments, index)?;
+    s.parse::<T>()
+        .map_err(|_| CommandError::InvalidInput("Unable to parse argument to a number".into()))
+}
+
+pub async fn handle_command(
+    input: RedisType,
+    store: &SharedStore,
+) -> Result<RedisType, CommandError> {
     let RedisType::Array(elements) = input else {
         return Err(CommandError::InvalidInput(
             "The supplied input has an invalid format or redis type: Input needs to be of RedisType::Array".to_string(),
         ));
     };
 
-    let first_element = elements.data.first().ok_or(CommandError::InvalidInput(
-        "The input is empty and cannot be processed".to_string(),
-    ))?;
-    let arguments = &elements.data[1..];
-    match first_element {
-        RedisType::BulkString(value) => {
-            let command = value.data.to_uppercase();
-            match command.as_str() {
-                "PING" => handle_pong(arguments),
-                "ECHO" => handle_echo(arguments),
-                "LRANGE" => handle_lrange(arguments, store).await,
-                "RPUSH" => handle_rpush(arguments, store).await,
-                "LPUSH" => handle_lpush(arguments, store).await,
-                "GET" => handle_get(arguments, store).await,
-                "SET" => handle_set(arguments, store).await,
-                "LLEN" => handle_llen(arguments, store).await,
-                "LPOP" => handle_lpop(arguments, store).await,
-                _ => Err(CommandError::UnknownCommand(format!("redis command {} not supported", command))),
-            }
-        }
-        _ => Err(CommandError::InvalidInput(
-            "The supplied command has an invalid format or redis type: The first argument should be a RedisType::BulkString.".to_string(),
-        )),
+    let command = argument_as_str(&elements, 0)?.to_ascii_uppercase();
+
+    let arguments = &elements[1..];
+    match command.as_str() {
+        "PING" => handle_pong(arguments),
+        "ECHO" => handle_echo(arguments),
+        "LRANGE" => handle_lrange(arguments, store).await,
+        "RPUSH" => handle_rpush(arguments, store).await,
+        "LPUSH" => handle_lpush(arguments, store).await,
+        "GET" => handle_get(arguments, store).await,
+        "SET" => handle_set(arguments, store).await,
+        "LLEN" => handle_llen(arguments, store).await,
+        "LPOP" => handle_lpop(arguments, store).await,
+        _ => Err(CommandError::UnknownCommand(format!(
+            "redis command {} not supported",
+            command
+        ))),
     }
 }

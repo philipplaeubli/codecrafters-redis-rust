@@ -9,6 +9,7 @@ use std::{
     thread,
 };
 
+use bytes::BytesMut;
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -17,7 +18,7 @@ use tokio::{
 
 use crate::{
     commands::{CommandError, handle_command},
-    parser::{RedisData, RedisType, RespParseError, parse_resp},
+    parser::{RedisType, RespParseError, parse_resp},
     store::{SharedStore, Store},
 };
 mod commands;
@@ -32,34 +33,24 @@ enum RedisError {
 }
 
 async fn handle_connection(mut stream: TcpStream, store: SharedStore) -> Result<(), RedisError> {
-    let mut buffer = [0; 1024];
+    let mut buffer = BytesMut::with_capacity(1024);
     loop {
         let read_length = stream
-            .read(&mut buffer)
+            .read_buf(&mut buffer)
             .await
             .map_err(|io_error| RedisError::IoError(io_error))?;
-
         if read_length == 0 {
-            println!("Received empty input");
+            println!("Client closed connection");
             break;
         }
-        let input_str = match str::from_utf8(&buffer[0..read_length]) {
-            Ok(input_str) => input_str,
-            Err(_) => {
-                println!("Received invalid input");
-                break;
-            }
-        };
-        println!("Received input: {:?}", input_str);
-        let result =
-            parse_resp(&buffer[0..read_length]).map_err(|err| RedisError::ParseError(err))?;
+        let result = parse_resp(&mut buffer).map_err(|err| RedisError::ParseError(err))?;
         println!("Parsed response: {:?}", result);
         let response = handle_command(result, &store)
             .await
             .map_err(|command_error| RedisError::CommandError(command_error))?;
-
+        let res = response.to_bytes();
         stream
-            .write_all(response.as_bytes())
+            .write_all(&res)
             .await
             .map_err(|io_error| RedisError::IoError(io_error))?;
     }

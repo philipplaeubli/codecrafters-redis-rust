@@ -1,26 +1,16 @@
 use std::fmt;
 
-type ErrorKind = String;
-
-#[derive(Debug, PartialEq)]
-pub struct SimpleError {
-    kind: ErrorKind,
-    message: String,
-}
-
-#[derive(Debug, PartialEq)]
-pub struct RedisData<T> {
-    pub data: T,
-    pub buffer_length: usize,
-}
+use bytes::{Buf, Bytes, BytesMut, buf};
 
 #[derive(Debug, PartialEq)]
 pub enum RedisType {
-    SimpleString(RedisData<String>),
-    BulkString(RedisData<String>),
-    SimpleError(RedisData<SimpleError>),
-    Array(RedisData<Vec<RedisType>>),
-    None,
+    SimpleString(Bytes),
+    BulkString(Bytes),
+    Integer(i128),
+    NullBulkString,
+    SimpleError(Bytes),
+    Array(Vec<RedisType>),
+    Null,
 }
 #[derive(Debug, PartialEq)]
 pub enum RespParseError {
@@ -29,33 +19,60 @@ pub enum RespParseError {
 
 const CRLF: &[u8] = b"\r\n";
 
-pub fn parse_resp(input: &[u8]) -> Result<RedisType, RespParseError> {
+pub fn parse_resp(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
     // resp inputs are by definition arrays
-    parse_array(input)
+    parse_array(buffer)
 }
 
-impl fmt::Display for RedisType {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl RedisType {
+    pub fn encode(&self, out: &mut BytesMut) {
         match self {
-            RedisType::SimpleString(value) => write!(formatter, "+{}\r\n", value.data),
-            RedisType::BulkString(value) => {
-                write!(formatter, "${}\r\n{}\r\n", value.data.len(), value.data)
+            RedisType::SimpleString(s) => {
+                out.extend_from_slice(b"+");
+                out.extend_from_slice(&s);
+                out.extend_from_slice(b"\r\n");
             }
-            RedisType::SimpleError(error) => {
-                write!(formatter, "-{}{}\r\n", error.data.kind, error.data.message)
+            RedisType::SimpleError(msg) => {
+                out.extend_from_slice(b"-");
+                out.extend_from_slice(&msg);
+                out.extend_from_slice(b"\r\n");
             }
-            RedisType::Array(value) => {
-                write!(formatter, "*{}\r\n", value.data.len())?;
-                for redis_type in &value.data {
-                    write!(formatter, "{}", redis_type)?;
+            RedisType::Integer(n) => {
+                out.extend_from_slice(b":");
+                // numbers must be ASCII text in RESP
+                out.extend_from_slice(n.to_string().as_bytes());
+                out.extend_from_slice(b"\r\n");
+            }
+            RedisType::BulkString(bytes) => {
+                out.extend_from_slice(b"$");
+                out.extend_from_slice(bytes.len().to_string().as_bytes());
+                out.extend_from_slice(b"\r\n");
+                out.extend_from_slice(bytes);
+                out.extend_from_slice(b"\r\n");
+            }
+            RedisType::Array(items) => {
+                out.extend_from_slice(b"*");
+                out.extend_from_slice(items.len().to_string().as_bytes());
+                out.extend_from_slice(b"\r\n");
+                for item in items {
+                    item.encode(out);
                 }
-                Ok(())
             }
-            RedisType::None => write!(formatter, "_\r\n"),
+            RedisType::Null => {
+                out.extend_from_slice(b"$-1\r\n");
+            }
+            RedisType::NullBulkString => {
+                out.extend_from_slice(b"$-1\r\n");
+            }
         }
     }
-}
 
+    pub fn to_bytes(&self) -> Bytes {
+        let mut out = BytesMut::new();
+        self.encode(&mut out);
+        out.freeze()
+    }
+}
 // Happy path, if we encounter a Utf8Error, we assume that the input is invalid
 impl From<std::str::Utf8Error> for RespParseError {
     fn from(_error: std::str::Utf8Error) -> Self {
@@ -75,74 +92,56 @@ impl From<std::io::Error> for RespParseError {
     }
 }
 
-fn parse_array(input: &[u8]) -> Result<RedisType, RespParseError> {
-    let array_with_size_prefix = &input[1..];
-    let array_len_delimiter_pos = array_with_size_prefix
+fn parse_array(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
+    // let array_with_size_prefix = &buffer[1..];
+    let array_len_delimiter_pos = buffer
         .windows(2)
         .position(|w| w == CRLF)
         .ok_or(RespParseError::InvalidFormat)?;
 
-    let size_as_string = &array_with_size_prefix[0..array_len_delimiter_pos];
+    let size_as_string = &buffer[1..array_len_delimiter_pos];
     let array_length = str::from_utf8(size_as_string)?.parse::<usize>()?;
     let array_start_position = array_len_delimiter_pos + 2;
 
-    let array = &array_with_size_prefix[array_start_position..];
+    buffer.advance(array_start_position);
+
     let mut elements: Vec<RedisType> = Vec::with_capacity(array_length);
-    let mut pos: usize = 0;
-    while pos < array.len() && elements.len() < array_length {
-        let element = match array[pos] {
-            b'+' => parse_simple_string(&array[pos..]),
-            b'-' => parse_simple_error(&array[pos..]),
-            b'$' => parse_bulk_string(&array[pos..]),
-            b'*' => parse_array(&array[pos..]),
-            _ => Ok(RedisType::None),
+
+    while elements.len() < array_length {
+        let element = match buffer[0] {
+            b'+' => parse_simple_string(buffer),
+            b'-' => parse_simple_error(buffer),
+            b'$' => parse_bulk_string(buffer),
+            b'*' => parse_array(buffer),
+            _ => Ok(RedisType::Null),
         };
 
-        if let Ok(element) = element
-            && element != RedisType::None
-        {
-            let skip_ahead = match &element {
-                RedisType::SimpleString(value) => value.buffer_length,
-                RedisType::SimpleError(value) => value.buffer_length,
-                RedisType::BulkString(value) => value.buffer_length,
-                RedisType::Array(value) => value.buffer_length,
-                _ => 0,
-            };
-            pos += skip_ahead;
+        if let Ok(element) = element {
             elements.push(element);
-        } else {
-            pos += 1;
         }
     }
 
-    let final_length = array_start_position + 1 + pos;
-
-    Ok(RedisType::Array(RedisData {
-        data: elements,
-        buffer_length: final_length,
-    }))
+    Ok(RedisType::Array(elements))
 }
 
-fn parse_bulk_string(input: &[u8]) -> Result<RedisType, RespParseError> {
-    let bulk_string = &input[1..input.len()];
+fn parse_bulk_string(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
     // determine bulk string length:
-    let str_size_delimiter_pos = bulk_string
+    let str_size_delimiter_pos = buffer
         .windows(2)
         .position(|w| w == CRLF)
         .ok_or(RespParseError::InvalidFormat)?;
+    let size_as_string = &buffer[1..str_size_delimiter_pos];
 
-    let size_as_string = &bulk_string[0..str_size_delimiter_pos];
-    let size = str::from_utf8(size_as_string)?.parse::<usize>()?; // this is so neat in rust -> implement the traits, get happy path for free -> no manual error mapping
+    let size = str::from_utf8(size_as_string)?.parse::<usize>()?;
     let string_start_position = str_size_delimiter_pos + 2;
 
-    let delimiter = &bulk_string[str_size_delimiter_pos..string_start_position];
-
+    let delimiter = &buffer[str_size_delimiter_pos..string_start_position];
     // before the actual data, we have a crlf delimiter
     if delimiter != CRLF {
         eprintln!("Invalid format: Expected CRLF delimiter");
         return Err(RespParseError::InvalidFormat);
     }
-    let string_end = bulk_string[string_start_position..]
+    let string_end = buffer[string_start_position..]
         .windows(2)
         .position(|w| w == CRLF)
         .ok_or(RespParseError::InvalidFormat)?;
@@ -156,361 +155,202 @@ fn parse_bulk_string(input: &[u8]) -> Result<RedisType, RespParseError> {
         return Err(RespParseError::InvalidFormat);
     }
 
-    // the actual string starts after the delimiter, goes (starting after the delimiter) until the size.
-    let actual_string = &bulk_string[string_start_position..string_start_position + size];
+    buffer.advance(string_start_position);
+    let content = buffer.split_to(string_end).freeze();
+    buffer.advance(2); // Skip  CRLF
 
-    Ok(RedisType::BulkString(RedisData {
-        data: String::from_utf8_lossy(actual_string).into(),
-        buffer_length: string_start_position + string_end + 3,
-    }))
+    Ok(RedisType::BulkString(content))
 }
 
-fn parse_simple_string(input: &[u8]) -> Result<RedisType, RespParseError> {
-    let simple_string = &input[1..];
-
+fn parse_simple_string(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
     // don't parse the whole buffer, but only until the crlf
-    let end = simple_string.windows(2).position(|word| word == CRLF);
-
+    let end = buffer.windows(2).position(|word| word == CRLF);
     if let Some(end) = end {
         // a simple string must not contain \r or \n
-        for &byte in &simple_string[..end] {
+        for &byte in &buffer[1..end] {
             if byte == b'\r' || byte == b'\n' {
                 eprintln!("Invalid format: Simple string contains invalid characters");
                 return Err(RespParseError::InvalidFormat);
             }
         }
-        Ok(RedisType::SimpleString(RedisData {
-            data: String::from_utf8_lossy(&simple_string[..end]).into(),
-            buffer_length: end + 3,
-        }))
+        buffer.advance(1);
+        let content = buffer.split_to(end - 1).freeze();
+        buffer.advance(2); // Skip the CRLF
+
+        Ok(RedisType::SimpleString(content))
     } else {
         Err(RespParseError::InvalidFormat)
     }
 }
 
-fn parse_simple_error(input: &[u8]) -> Result<RedisType, RespParseError> {
-    let mut simple_error = &input[1..];
-    // don't parse the whole buffer, but only until the crlf
-    let end = simple_error.windows(2).position(|word| word == CRLF);
-
-    if let Some(end) = end {
-        simple_error = &simple_error[..end];
-        let mut error_kind = "GENERIC".to_string();
-        // walk through the simple error until the first space, if all chars of the first word are uppercase,
-        // we set the error_kind to that valute and reutrn the rest as error message
-        let mut error_kind_index = 0;
-        let mut space_separated = false;
-        for &byte in simple_error {
-            if byte == b' ' {
-                // "word" is finished
-                space_separated = true;
-                break;
-            }
-            if !byte.is_ascii_uppercase() {
-                break;
-            }
-            error_kind_index += 1;
-        }
-
-        // to have a custom error kind we have only upper case chars in the first word.
-        // And the first word must be more than 1 character long (Prevents an error kind of "A error" -> error kind "A")
-        if error_kind_index > 1 && space_separated {
-            error_kind = String::from_utf8_lossy(&simple_error[..error_kind_index]).into();
-            simple_error = &simple_error[error_kind_index + 1..];
-        }
-
-        Ok(RedisType::SimpleError(RedisData {
-            data: SimpleError {
-                kind: error_kind,
-                message: String::from_utf8_lossy(simple_error).into(),
-            },
-            buffer_length: end + 3,
-        }))
-    } else {
-        Err(RespParseError::InvalidFormat)
-    }
+fn parse_simple_error(input: &mut BytesMut) -> Result<RedisType, RespParseError> {
+    parse_simple_string(input).and_then(|string| match string {
+        RedisType::SimpleString(content) => Ok(RedisType::SimpleError(content)),
+        _ => Err(RespParseError::InvalidFormat),
+    })
 }
 
 #[test]
 fn test_parse_simple_string() {
-    let input = b"+OK\r\n";
-    let len = input.len();
-    let expected = RedisType::SimpleString(RedisData {
-        data: "OK".to_string(),
-        buffer_length: len,
-    });
-    assert_eq!(parse_simple_string(input), Ok(expected));
+    let mut input = BytesMut::from("+OK\r\n");
+    let expected = RedisType::SimpleString(BytesMut::from("OK").freeze());
+    assert_eq!(parse_simple_string(&mut input), Ok(expected));
 }
 
 #[test]
 fn test_parse_simple_string_missing_crlf() {
-    let input = b"+OK";
+    let mut input = BytesMut::from("+OK");
     let expected = RespParseError::InvalidFormat;
-    assert_eq!(parse_simple_string(input), Err(expected));
+    assert_eq!(parse_simple_string(&mut input), Err(expected));
 }
 #[test]
 fn test_parse_simple_string_invalid_crlf_inside() {
-    let input = b"+OK\rBye\r\n";
+    let mut input = BytesMut::from("+OK\rBye\r\n");
+
     let expected = RespParseError::InvalidFormat;
-    assert_eq!(parse_simple_string(input), Err(expected));
+    assert_eq!(parse_simple_string(&mut input), Err(expected));
 }
 
 #[test]
 fn test_parse_simple_error() {
-    let input = b"-Error message\r\n";
-    let len = input.len();
-    let expected = RedisType::SimpleError(RedisData {
-        data: SimpleError {
-            kind: "GENERIC".to_string(),
-            message: "Error message".to_string(),
-        },
-        buffer_length: len,
-    });
-    assert_eq!(parse_simple_error(input), Ok(expected));
+    let mut input = BytesMut::from("-Error message\r\n");
+    let expected = RedisType::SimpleError(BytesMut::from("Error message").freeze());
+    assert_eq!(parse_simple_error(&mut input), Ok(expected));
 }
 
 #[test]
 fn test_parse_simple_error_with_error_kind() {
-    let input = b"-WRONGTYPE Operation against a key holding the wrong kind of error\r\n";
-    let len = input.len();
-    let expected = RedisType::SimpleError(RedisData {
-        data: SimpleError {
-            kind: "WRONGTYPE".to_string(),
-            message: "Operation against a key holding the wrong kind of error".to_string(),
-        },
-        buffer_length: len,
-    });
-    assert_eq!(parse_simple_error(input), Ok(expected));
-}
-#[test]
-fn test_parse_simple_error_with_without_error_kind_one_uppercase_char_start() {
-    let input = b"-A thing is broken\r\n";
-    let len = input.len();
-    let expected = RedisType::SimpleError(RedisData {
-        data: SimpleError {
-            kind: "GENERIC".into(),
-            message: "A thing is broken".into(),
-        },
-        buffer_length: len,
-    });
-    assert_eq!(parse_simple_error(input), Ok(expected));
+    let mut input =
+        BytesMut::from("-WRONGTYPE Operation against a key holding the wrong kind of error\r\n");
+    let expected = RedisType::SimpleError(
+        BytesMut::from("WRONGTYPE Operation against a key holding the wrong kind of error")
+            .freeze(),
+    );
+    assert_eq!(parse_simple_error(&mut input), Ok(expected));
 }
 
 #[test]
 fn test_parse_bulk_string() {
-    let input = b"$5\r\nhello\r\n";
-    let len = input.len();
-    let expected = RedisType::BulkString(RedisData {
-        data: "hello".to_string(),
-        buffer_length: len,
-    });
-    assert_eq!(parse_bulk_string(input), Ok(expected));
+    let mut input = BytesMut::from("$5\r\nhello\r\n");
+    let expected = RedisType::BulkString(BytesMut::from("hello").freeze());
+    assert_eq!(parse_bulk_string(&mut input), Ok(expected));
 }
 #[test]
 fn test_parse_bulk_string_with_missing_delimiters() {
     assert_eq!(
-        parse_bulk_string(b"$5\rhello\r\n"),
+        parse_bulk_string(&mut BytesMut::from("$5\rhello\r\n")),
         Err(RespParseError::InvalidFormat)
     );
     assert_eq!(
-        parse_bulk_string(b"$5hello\r\n"),
+        parse_bulk_string(&mut BytesMut::from("$5hello\r\n")),
         Err(RespParseError::InvalidFormat)
     );
     assert_eq!(
-        parse_bulk_string(b"$5\nhello\r\n"),
+        parse_bulk_string(&mut BytesMut::from("$5\nhello\r\n")),
         Err(RespParseError::InvalidFormat)
     );
 
     assert_eq!(
-        parse_bulk_string(b"$5\r\nhello"),
+        parse_bulk_string(&mut BytesMut::from("$5\r\nhello")),
         Err(RespParseError::InvalidFormat)
     );
     assert_eq!(
-        parse_bulk_string(b"$5\r\nhello\r"),
+        parse_bulk_string(&mut BytesMut::from("$5\r\nhello\r")),
         Err(RespParseError::InvalidFormat)
     );
     assert_eq!(
-        parse_bulk_string(b"$5\r\nhello\n"),
+        parse_bulk_string(&mut BytesMut::from("$5\r\nhello\n")),
         Err(RespParseError::InvalidFormat)
     );
 }
 #[test]
 fn test_parse_bulk_string_with_size_mismatch() {
     assert_eq!(
-        parse_bulk_string(b"$1000\r\nhello\r\n"),
+        parse_bulk_string(&mut BytesMut::from("$1000\r\nhello\r\n")),
         Err(RespParseError::InvalidFormat)
     );
 
     assert_eq!(
-        parse_bulk_string(b"$6\r\nhello\r\n"),
+        parse_bulk_string(&mut BytesMut::from("$6\r\nhello\r\n")),
         Err(RespParseError::InvalidFormat)
     );
 
     assert_eq!(
-        parse_bulk_string(b"$4\r\nhello\r\n"),
+        parse_bulk_string(&mut BytesMut::from("$4\r\nhello\r\n")),
         Err(RespParseError::InvalidFormat)
     );
 }
 #[test]
 fn test_parse_bulk_string_with_invalid_size() {
     assert_eq!(
-        parse_bulk_string(b"$-1\r\nhello\r\n"),
+        parse_bulk_string(&mut BytesMut::from("$-1\r\nhello\r\n")),
         Err(RespParseError::InvalidFormat)
     );
 }
 #[test]
 fn test_parse_bulk_string_with_empty_string() {
-    let input = b"$0\r\n\r\n";
-    let len = input.len();
-    assert_eq!(
-        parse_bulk_string(input),
-        Ok(RedisType::BulkString(RedisData {
-            data: "".into(),
-            buffer_length: len
-        }))
-    );
+    let mut input = BytesMut::from("$0\r\n\r\n");
+    let res = parse_bulk_string(&mut input).unwrap().to_bytes();
+    assert_eq!(res.as_ref(), b"$0\r\n\r\n");
 }
 
 #[test]
 fn test_parse_lrange_array() {
-    let lrange_len = "$6\r\nLRANGE\r\n".len();
-    let pear_len = "$4\r\npear\r\n".len();
-    let minus_three_len = "$2\r\n-3\r\n".len();
-    let minus_one_len = "$2\r\n-1\r\n".len();
-    let input = b"*4\r\n$6\r\nLRANGE\r\n$4\r\npear\r\n$2\r\n-3\r\n$2\r\n-1\r\n";
-    let len = input.len();
+    let mut input = BytesMut::from("*4\r\n$6\r\nLRANGE\r\n$4\r\npear\r\n$2\r\n-3\r\n$2\r\n-1\r\n");
+
     assert_eq!(
-        parse_array(input),
-        Ok(RedisType::Array(RedisData {
-            data: vec![
-                RedisType::BulkString(RedisData {
-                    data: "LRANGE".into(),
-                    buffer_length: lrange_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "pear".into(),
-                    buffer_length: pear_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "-3".into(),
-                    buffer_length: minus_three_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "-1".into(),
-                    buffer_length: minus_one_len,
-                }),
-            ],
-            buffer_length: len
-        }))
+        parse_array(&mut input),
+        Ok(RedisType::Array(vec![
+            RedisType::BulkString(BytesMut::from("LRANGE").freeze()),
+            RedisType::BulkString(BytesMut::from("pear").freeze()),
+            RedisType::BulkString(BytesMut::from("-3").freeze()),
+            RedisType::BulkString(BytesMut::from("-1").freeze()),
+        ]))
     );
 }
 
 #[test]
 fn test_parse_array_empty_array() {
-    let input = b"*0\r\n";
-    let len = input.len();
-    assert_eq!(
-        parse_array(input),
-        Ok(RedisType::Array(RedisData {
-            data: vec![],
-            buffer_length: len
-        }))
-    );
+    let mut input = BytesMut::from("*0\r\n");
+    assert_eq!(parse_array(&mut input), Ok(RedisType::Array(vec![])));
 }
 
 #[test]
 fn test_parse_array_large_string_array() {
-    let hello_len = b"$5\r\nhello\r\n".len();
-
-    let buffer = b"*10\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n";
-    let buffer_length = buffer.len();
-    assert_eq!(
-        parse_array(buffer),
-        Ok(RedisType::Array(RedisData {
-            data: vec![
-                RedisType::BulkString(RedisData {
-                    data: "hello".into(),
-                    buffer_length: hello_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "hello".into(),
-                    buffer_length: hello_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "hello".into(),
-                    buffer_length: hello_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "hello".into(),
-                    buffer_length: hello_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "hello".into(),
-                    buffer_length: hello_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "hello".into(),
-                    buffer_length: hello_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "hello".into(),
-                    buffer_length: hello_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "hello".into(),
-                    buffer_length: hello_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "hello".into(),
-                    buffer_length: hello_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "hello".into(),
-                    buffer_length: hello_len,
-                }),
-            ],
-            buffer_length: buffer_length
-        }))
+    let mut buffer = BytesMut::from(
+        "*10\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n$5\r\nhello\r\n",
     );
+
+    assert_eq!(
+        parse_array(&mut buffer),
+        Ok(RedisType::Array(vec![
+            RedisType::BulkString(BytesMut::from("hello").freeze()),
+            RedisType::BulkString(BytesMut::from("hello").freeze()),
+            RedisType::BulkString(BytesMut::from("hello").freeze()),
+            RedisType::BulkString(BytesMut::from("hello").freeze()),
+            RedisType::BulkString(BytesMut::from("hello").freeze()),
+            RedisType::BulkString(BytesMut::from("hello").freeze()),
+            RedisType::BulkString(BytesMut::from("hello").freeze()),
+            RedisType::BulkString(BytesMut::from("hello").freeze()),
+            RedisType::BulkString(BytesMut::from("hello").freeze()),
+            RedisType::BulkString(BytesMut::from("hello").freeze()),
+        ]))
+    )
 }
 #[test]
 fn test_parse_array_nested_array() {
-    let inner_hello_len = b"$5\r\nhello\r\n".len();
-    let inner_world_len = b"$5\r\nworld\r\n".len();
-    let inner_array_len = b"*2\r\n$5\r\nhello\r\n$5\r\nworld\r\n".len();
-    let outer_foo_len = b"$3\r\nfoo\r\n".len();
-    let outer_bar_len = b"$3\r\nbar\r\n".len();
-
-    let input = b"*3\r\n$3\r\nfoo\r\n*2\r\n$5\r\nhello\r\n$5\r\nworld\r\n$3\r\nbar\r\n";
-    let len = input.len();
+    let mut input =
+        BytesMut::from("*3\r\n$3\r\nfoo\r\n*2\r\n$5\r\nhello\r\n$5\r\nworld\r\n$3\r\nbar\r\n");
 
     assert_eq!(
-        parse_array(input),
-        Ok(RedisType::Array(RedisData {
-            data: vec![
-                RedisType::BulkString(RedisData {
-                    data: "foo".into(),
-                    buffer_length: outer_foo_len,
-                }),
-                RedisType::Array(RedisData {
-                    data: vec![
-                        RedisType::BulkString(RedisData {
-                            data: "hello".into(),
-                            buffer_length: inner_hello_len,
-                        }),
-                        RedisType::BulkString(RedisData {
-                            data: "world".into(),
-                            buffer_length: inner_world_len,
-                        }),
-                    ],
-                    buffer_length: inner_array_len,
-                }),
-                RedisType::BulkString(RedisData {
-                    data: "bar".into(),
-                    buffer_length: outer_bar_len,
-                }),
-            ],
-            buffer_length: len
-        }))
+        parse_array(&mut input),
+        Ok(RedisType::Array(vec![
+            RedisType::BulkString(BytesMut::from("foo").freeze()),
+            RedisType::Array(vec![
+                RedisType::BulkString(BytesMut::from("hello").freeze()),
+                RedisType::BulkString(BytesMut::from("world").freeze()),
+            ],),
+            RedisType::BulkString(BytesMut::from("bar").freeze()),
+        ],))
     );
 }

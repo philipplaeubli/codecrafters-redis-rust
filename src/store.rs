@@ -5,16 +5,17 @@ use std::{
     time::{SystemTime, SystemTimeError, UNIX_EPOCH},
 };
 
+use bytes::{Bytes, BytesMut};
 use tokio::sync::RwLock;
 
-pub struct StringWithExpiry {
-    value: String,
+pub struct WithExpiry {
+    value: Bytes,
     expires: Option<u128>,
 }
 
 pub struct Store {
-    keys: HashMap<String, StringWithExpiry>,
-    lists: HashMap<String, Vec<String>>,
+    keys: HashMap<Bytes, WithExpiry>,
+    lists: HashMap<Bytes, Vec<Bytes>>,
 }
 
 #[derive(Debug)]
@@ -40,21 +41,21 @@ impl Store {
         }
     }
 
-    pub fn rpush(&mut self, key: &str, mut values: Vec<String>) -> Result<usize, StoreError> {
-        let list = self.lists.entry(key.to_string()).or_default();
+    pub fn rpush(&mut self, key: Bytes, mut values: Vec<Bytes>) -> Result<usize, StoreError> {
+        let list = self.lists.entry(key).or_default();
         list.append(&mut values);
         Ok(list.len())
     }
 
-    pub fn lpush(&mut self, key: &str, mut values: Vec<String>) -> Result<usize, StoreError> {
-        let list = self.lists.entry(key.to_string()).or_default();
+    pub fn lpush(&mut self, key: Bytes, mut values: Vec<Bytes>) -> Result<usize, StoreError> {
+        let list = self.lists.entry(key).or_default();
         values.reverse(); // reverse the order of the values
         list.splice(0..0, values); //  inserts all the values at the beginning of the list
         Ok(list.len())
     }
 
-    pub fn get(&self, key: &str) -> Result<String, StoreError> {
-        let result = self.keys.get(key).ok_or(StoreError::KeyNotFound)?;
+    pub fn get(&self, key: Bytes) -> Result<Bytes, StoreError> {
+        let result = self.keys.get(&key).ok_or(StoreError::KeyNotFound)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
 
         if let Some(expiry) = result.expires {
@@ -68,11 +69,11 @@ impl Store {
 
     pub fn lrange(
         &self,
-        key: &str,
+        key: Bytes,
         mut start: i128,
         mut end: i128,
-    ) -> Result<Vec<String>, StoreError> {
-        let list = self.lists.get(key).ok_or(StoreError::KeyNotFound)?;
+    ) -> Result<Vec<Bytes>, StoreError> {
+        let list = self.lists.get(&key).ok_or(StoreError::KeyNotFound)?;
         let list_length = list.len() as i128;
         if start < 0 {
             start = list_length + start;
@@ -108,8 +109,8 @@ impl Store {
 
     pub fn set_with_expiry(
         &mut self,
-        key: &str,
-        value: &str,
+        key: Bytes,
+        value: Bytes,
         expiry: Option<u128>,
     ) -> Result<(), StoreError> {
         let mut expires: Option<u128> = None;
@@ -118,21 +119,18 @@ impl Store {
             expires = Some(now + expiry);
         }
 
-        let key_value = StringWithExpiry {
-            value: value.to_string(),
-            expires,
-        };
-        self.keys.insert(key.to_string(), key_value);
+        let key_value = WithExpiry { value, expires };
+        self.keys.insert(key, key_value);
         Ok(())
     }
 
-    pub fn llen(&mut self, key: &str) -> Result<usize, StoreError> {
-        let list = self.lists.entry(key.to_string()).or_default();
+    pub fn llen(&mut self, key: Bytes) -> Result<usize, StoreError> {
+        let list = self.lists.entry(key).or_default();
         Ok(list.len())
     }
 
-    pub fn lpop(&mut self, key: &str, amount: i128) -> Result<Vec<String>, StoreError> {
-        let list = self.lists.entry(key.to_string()).or_default();
+    pub fn lpop(&mut self, key: Bytes, amount: i128) -> Result<Vec<Bytes>, StoreError> {
+        let list = self.lists.entry(key).or_default();
 
         if list.len() > 0 {
             let removed = list.drain(..amount as usize).collect();
@@ -145,17 +143,17 @@ impl Store {
 #[test]
 fn test_lpush() {
     let mut store = Store::new();
+    let key = BytesMut::from("test").freeze();
+    let _ = store.lpush(key.clone(), vec!["c".into(), "b".into(), "a".into()]);
 
-    let _ = store.lpush("test", vec!["c".into(), "b".into(), "a".into()]);
-
-    let result = store.lrange("test", 0, -1).unwrap();
+    let result = store.lrange(key.clone(), 0, -1).unwrap();
     assert_eq!(
         result,
         vec!["a".to_string(), "b".to_string(), "c".to_string()]
     );
 
-    let _ = store.lpush("test", vec!["d".into()]);
-    let result = store.lrange("test", 0, -1).unwrap();
+    let _ = store.lpush(key.clone(), vec!["d".into()]);
+    let result = store.lrange(key.clone(), 0, -1).unwrap();
     assert_eq!(
         result,
         vec![
