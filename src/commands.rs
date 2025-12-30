@@ -1,15 +1,10 @@
-use std::{
-    fmt::format,
-    str::FromStr,
-    sync::{Arc, RwLock},
-};
+use std::str::FromStr;
 
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
 use crate::{
-    RedisMessage,
-    parser::{RedisType, RespParseError},
+    parser::RedisType,
     store::{Store, StoreError},
 };
 

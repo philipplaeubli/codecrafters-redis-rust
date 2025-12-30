@@ -1,6 +1,4 @@
-use std::fmt;
-
-use bytes::{Buf, Bytes, BytesMut, buf};
+use bytes::{Buf, Bytes, BytesMut};
 
 #[derive(Debug, PartialEq)]
 pub enum RedisType {

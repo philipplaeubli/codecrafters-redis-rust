@@ -1,17 +1,13 @@
 use std::{
     collections::{HashMap, VecDeque},
-    ops::Deref,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, SystemTimeError, UNIX_EPOCH},
 };
 
-use bytes::{Bytes, BytesMut};
-use tokio::sync::{RwLock, oneshot};
+use bytes::Bytes;
+use tokio::sync::oneshot;
 
-use crate::{RedisMessage, parser::RedisType};
+use crate::parser::RedisType;
 
 pub struct WithExpiry {
     value: Bytes,
