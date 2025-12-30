@@ -116,9 +116,7 @@ fn parse_array(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
             _ => Ok(RedisType::NullBulkString),
         };
 
-        if let Ok(element) = element {
-            elements.push(element);
-        }
+        elements.push(element?);
     }
 
     Ok(RedisType::Array(Some(elements)))
