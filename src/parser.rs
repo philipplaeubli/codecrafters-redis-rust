@@ -158,7 +158,7 @@ fn parse_bulk_string(buffer: &mut BytesMut) -> Result<RedisType, RespParseError>
     Ok(RedisType::BulkString(content))
 }
 
-fn parse_simple_string(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
+fn parse_simple_content(buffer: &mut BytesMut) -> Result<Bytes, RespParseError> {
     // don't parse the whole buffer, but only until the crlf
     let end = buffer.windows(2).position(|word| word == CRLF);
     if let Some(end) = end {
@@ -173,17 +173,18 @@ fn parse_simple_string(buffer: &mut BytesMut) -> Result<RedisType, RespParseErro
         let content = buffer.split_to(end - 1).freeze();
         buffer.advance(2); // Skip the CRLF
 
-        Ok(RedisType::SimpleString(content))
+        Ok(content)
     } else {
         Err(RespParseError::InvalidFormat)
     }
 }
 
-fn parse_simple_error(input: &mut BytesMut) -> Result<RedisType, RespParseError> {
-    parse_simple_string(input).and_then(|string| match string {
-        RedisType::SimpleString(content) => Ok(RedisType::SimpleError(content)),
-        _ => Err(RespParseError::InvalidFormat),
-    })
+fn parse_simple_string(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
+    parse_simple_content(buffer).map(RedisType::SimpleString)
+}
+
+fn parse_simple_error(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
+    parse_simple_content(buffer).map(RedisType::SimpleError)
 }
 
 #[test]
