@@ -58,8 +58,8 @@ fn handle_set(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, C
 
     let mut expiry: Option<u128> = None;
     if arguments.len() == 4 {
-        let expiry_unit = argument_as_str(&arguments, 2)?;
-        let expiry_value: u128 = argument_as_number(&arguments, 3)?;
+        let expiry_unit = argument_as_str(arguments, 2)?;
+        let expiry_value: u128 = argument_as_number(arguments, 3)?;
 
         let unit_factor = match expiry_unit {
             "EX" => 1000,
