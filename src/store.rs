@@ -47,10 +47,10 @@ impl Store {
 
     pub fn rpush(&mut self, key: Bytes, values: Vec<Bytes>) -> Result<usize, StoreError> {
         let list = self.lists.entry(key.clone()).or_default();
-        list.append(&mut values.clone());
+        list.extend(values);
+
         let len = list.len();
         self.notify_first_waiting_client(&key);
-
         Ok(len)
     }
 
@@ -58,9 +58,9 @@ impl Store {
         let list = self.lists.entry(key.clone()).or_default();
         values.reverse(); // reverse the order of the values
         list.splice(0..0, values); //  inserts all the values at the beginning of the list
+
         let len = list.len();
         self.notify_first_waiting_client(&key);
-
         Ok(len)
     }
 
@@ -68,10 +68,10 @@ impl Store {
         let result = self.keys.get(&key).ok_or(StoreError::KeyNotFound)?;
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
 
-        if let Some(expiry) = result.expires {
-            if expiry < now {
-                return Err(StoreError::KeyExpired);
-            }
+        if let Some(expiry) = result.expires
+            && expiry < now
+        {
+            return Err(StoreError::KeyExpired);
         }
 
         Ok(result.value.clone())
@@ -86,13 +86,13 @@ impl Store {
         let list = self.lists.get(&key).ok_or(StoreError::KeyNotFound)?;
         let list_length = list.len() as i128;
         if start < 0 {
-            start = list_length + start;
+            start += list_length;
         }
         if end < 0 {
-            end = list_length + end;
+            end += list_length;
         }
 
-        end = end + 1;
+        end += 1;
 
         if start >= list_length {
             return Ok(vec![]);
@@ -134,9 +134,9 @@ impl Store {
         Ok(())
     }
 
-    pub fn llen(&mut self, key: Bytes) -> Result<usize, StoreError> {
-        let list = self.lists.entry(key).or_default();
-        Ok(list.len())
+    pub fn llen(&self, key: &Bytes) -> Result<usize, StoreError> {
+        let len = self.lists.get(key).map(|l| l.len()).unwrap_or(0);
+        Ok(len)
     }
 
     pub fn lpop(&mut self, key: Bytes, amount: i128) -> Result<Vec<Bytes>, StoreError> {

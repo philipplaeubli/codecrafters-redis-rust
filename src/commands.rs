@@ -39,9 +39,9 @@ fn handle_get(arguments: &[RedisType], store: &Store) -> Result<RedisType, Comma
         Ok(value) => Ok(RedisType::BulkString(value.clone())),
         Err(StoreError::KeyExpired) => Ok(RedisType::NullBulkString), // we handle key expiration and return a null bulk string
         Err(StoreError::KeyNotFound) => Ok(RedisType::NullBulkString),
-        Err(StoreError::TimeError) => Err(CommandError::InvalidInput(format!(
-            "Unable to convert expiry to unix timestamp"
-        ))),
+        Err(StoreError::TimeError) => Err(CommandError::InvalidInput(
+            "Unable to convert expiry to unix timestamp".into(),
+        )),
     }
 }
 
@@ -97,7 +97,7 @@ fn handle_rpush(arguments: &[RedisType], store: &mut Store) -> Result<RedisType,
 
     let new_length = store
         .rpush(key.clone(), values)
-        .map_err(|store_error| CommandError::StoreError(store_error))?;
+        .map_err(CommandError::StoreError)?;
 
     Ok(RedisType::Integer(new_length as i128))
 }
@@ -114,7 +114,7 @@ fn handle_lpush(arguments: &[RedisType], store: &mut Store) -> Result<RedisType,
         .collect::<Vec<Bytes>>();
     let new_length = store
         .lpush(key.clone(), values)
-        .map_err(|store_error| CommandError::StoreError(store_error))?;
+        .map_err(CommandError::StoreError)?;
 
     Ok(RedisType::Integer(new_length as i128))
 }
@@ -139,9 +139,7 @@ fn handle_lrange(arguments: &[RedisType], store: &Store) -> Result<RedisType, Co
 fn handle_llen(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
-    let len = store
-        .llen(key.clone())
-        .map_err(|store_error| CommandError::StoreError(store_error))?;
+    let len = store.llen(key).map_err(CommandError::StoreError)?;
 
     Ok(RedisType::Integer(len as i128))
 }

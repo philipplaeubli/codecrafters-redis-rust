@@ -48,12 +48,12 @@ async fn handle_connection(
         let read_length = stream
             .read_buf(&mut buffer)
             .await
-            .map_err(|io_error| RedisError::IoError(io_error))?;
+            .map_err(RedisError::IoError)?;
         if read_length == 0 {
             println!("Client closed connection");
             break;
         }
-        let result = parse_resp(&mut buffer).map_err(|err| RedisError::ParseError(err))?;
+        let result = parse_resp(&mut buffer).map_err(RedisError::ParseError)?;
 
         let (reply_tx, reply_rx) = oneshot::channel();
         let message = RedisMessage::SendMessage {
@@ -108,10 +108,7 @@ async fn handle_connection(
         };
 
         let res = response.to_bytes();
-        stream
-            .write_all(&res)
-            .await
-            .map_err(|io_error| RedisError::IoError(io_error))?;
+        stream.write_all(&res).await.map_err(RedisError::IoError)?;
     }
     Ok(())
 }

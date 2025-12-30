@@ -26,12 +26,12 @@ impl RedisType {
         match self {
             RedisType::SimpleString(s) => {
                 out.extend_from_slice(b"+");
-                out.extend_from_slice(&s);
+                out.extend_from_slice(s);
                 out.extend_from_slice(b"\r\n");
             }
             RedisType::SimpleError(msg) => {
                 out.extend_from_slice(b"-");
-                out.extend_from_slice(&msg);
+                out.extend_from_slice(msg);
                 out.extend_from_slice(b"\r\n");
             }
             RedisType::Integer(n) => {
