@@ -48,9 +48,9 @@ fn handle_get(arguments: &[RedisType], store: &Store) -> Result<RedisType, Comma
 fn handle_set(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
     if arguments.len() != 2 && arguments.len() != 4 {
         // either it's a simple SET, or it's a SET with an expiry
-        return Err(CommandError::InvalidInput(format!(
-            "Invalid input: expected 2 or 4 arguments"
-        )));
+        return Err(CommandError::InvalidInput(
+            "Invalid input: expected 2 or 4 arguments".into(),
+        ));
     }
 
     let key = extract_key(arguments)?;
@@ -65,9 +65,9 @@ fn handle_set(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, C
             "EX" => 1000,
             "PX" => 1,
             _ => {
-                return Err(CommandError::InvalidInput(format!(
-                    "Invalid input: expiry unit of SET must be either 'EX' or 'PX'"
-                )));
+                return Err(CommandError::InvalidInput(
+                    "Invalid input: expiry unit of SET must be either 'EX' or 'PX'".into(),
+                ));
             }
         };
         expiry = Some(expiry_value * unit_factor);
@@ -77,7 +77,7 @@ fn handle_set(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, C
         .set_with_expiry(key.clone(), value.clone(), expiry)
         .map_err(|store_error| match store_error {
             StoreError::TimeError => {
-                CommandError::InvalidInput(format!("Unable to convert expiry to unix timestamp"))
+                CommandError::InvalidInput("Unable to convert expiry to unix timestamp".into())
             }
             _ => CommandError::StoreError(store_error),
         })?;
@@ -170,7 +170,7 @@ fn handle_lpop(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, 
                 let resp = RedisType::Array(Some(
                     removed_elements
                         .into_iter()
-                        .map(|element| RedisType::BulkString(element.clone()))
+                        .map(|element| RedisType::BulkString(element))
                         .collect(),
                 ));
                 Ok(resp)
@@ -220,9 +220,9 @@ fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, Co
         Some(RedisType::BulkString(b)) => b,
         Some(RedisType::SimpleString(b)) => b,
         _ => {
-            return Err(CommandError::InvalidInput(format!(
-                "Invalid argument: Must be a bulkstring"
-            )));
+            return Err(CommandError::InvalidInput(
+                "Invalid argument: Must be a bulkstring".into(),
+            ));
         }
     };
     Ok(bytes)
@@ -234,14 +234,14 @@ fn argument_as_str(arguments: &[RedisType], index: usize) -> Result<&str, Comman
     let bytes = match arguments.get(index) {
         Some(RedisType::BulkString(b)) => b,
         _ => {
-            return Err(CommandError::InvalidInput(format!(
-                "Invalid argument: Must be a bulkstring"
-            )));
+            return Err(CommandError::InvalidInput(
+                "Invalid argument: Must be a bulkstring".into(),
+            ));
         }
     };
 
     str::from_utf8(bytes).map_err(|_| {
-        CommandError::InvalidInput(format!("Invalid argument: Must be a valid UTF-8 string"))
+        CommandError::InvalidInput("Invalid argument: Must be a valid UTF-8 string".into())
     })
 }
 

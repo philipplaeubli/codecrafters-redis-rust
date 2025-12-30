@@ -142,7 +142,7 @@ impl Store {
     pub fn lpop(&mut self, key: Bytes, amount: i128) -> Result<Vec<Bytes>, StoreError> {
         let list = self.lists.entry(key).or_default();
 
-        if list.len() > 0 {
+        if !list.is_empty() {
             let removed = list.drain(..amount as usize).collect();
             return Ok(removed);
         }
