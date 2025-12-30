@@ -25,6 +25,8 @@ impl From<SystemTimeError> for StoreError {
         StoreError::TimeError
     }
 }
+
+#[derive(Default)]
 pub struct Store {
     keys: HashMap<Bytes, WithExpiry>,
     lists: HashMap<Bytes, Vec<Bytes>>,
@@ -40,11 +42,7 @@ static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(0);
 
 impl Store {
     pub fn new() -> Self {
-        Store {
-            keys: HashMap::new(),
-            lists: HashMap::new(),
-            blpop_waiting_queue: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn rpush(&mut self, key: Bytes, values: Vec<Bytes>) -> Result<usize, StoreError> {
