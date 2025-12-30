@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
+    fmt::Display,
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, SystemTimeError, UNIX_EPOCH},
 };
@@ -242,4 +243,14 @@ fn test_lpush() {
             "c".to_string()
         ]
     );
+}
+
+impl Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StoreError::KeyNotFound => write!(f, "Key not found"),
+            StoreError::KeyExpired => write!(f, "Key expired"),
+            StoreError::TimeError => write!(f, "Could not convert time or expiry"),
+        }
+    }
 }

@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{fmt::Display, str::FromStr};
 
 use bytes::Bytes;
 use tokio::sync::oneshot;
@@ -287,5 +287,15 @@ pub fn handle_command(
             "redis command {} not supported",
             command
         ))),
+    }
+}
+
+impl Display for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CommandError::InvalidInput(message) => write!(f, "Invalid Input: {}", message),
+            CommandError::UnknownCommand(message) => write!(f, "Invalid Input: {}", message),
+            CommandError::StoreError(store_error) => write!(f, "Store Error: {}", store_error),
+        }
     }
 }
