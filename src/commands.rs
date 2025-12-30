@@ -128,10 +128,7 @@ fn handle_lrange(arguments: &[RedisType], store: &Store) -> Result<RedisType, Co
 
     let response = if let Ok(values) = result {
         RedisType::Array(Some(
-            values
-                .into_iter()
-                .map(|v| RedisType::BulkString(v))
-                .collect(),
+            values.into_iter().map(RedisType::BulkString).collect(),
         ))
     } else {
         RedisType::Array(Some(vec![]))
@@ -170,7 +167,7 @@ fn handle_lpop(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, 
                 let resp = RedisType::Array(Some(
                     removed_elements
                         .into_iter()
-                        .map(|element| RedisType::BulkString(element))
+                        .map(RedisType::BulkString)
                         .collect(),
                 ));
                 Ok(resp)
@@ -192,10 +189,7 @@ fn handle_blpop(
     if let Some(values) = store.lpop_for_blpop(key) {
         // Data available - send immediately
         let response = RedisType::Array(Some(
-            values
-                .into_iter()
-                .map(|element| RedisType::BulkString(element))
-                .collect(),
+            values.into_iter().map(RedisType::BulkString).collect(),
         ));
         return Ok(CommandResponse::Immediate(response));
     }
