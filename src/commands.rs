@@ -36,7 +36,7 @@ fn handle_echo(arguments: &[RedisType]) -> Result<RedisType, CommandError> {
     }
 }
 
-async fn handle_get(arguments: &[RedisType], store: &Store) -> Result<RedisType, CommandError> {
+fn handle_get(arguments: &[RedisType], store: &Store) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
     let value = store.get(key.clone());
@@ -50,7 +50,7 @@ async fn handle_get(arguments: &[RedisType], store: &Store) -> Result<RedisType,
     }
 }
 
-async fn handle_set(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
+fn handle_set(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
     if arguments.len() != 2 && arguments.len() != 4 {
         // either it's a simple SET, or it's a SET with an expiry
         return Err(CommandError::InvalidInput(format!(
@@ -89,10 +89,7 @@ async fn handle_set(arguments: &[RedisType], store: &mut Store) -> Result<RedisT
     Ok(RedisType::SimpleString(Bytes::from_static(b"OK")))
 }
 
-async fn handle_rpush(
-    arguments: &[RedisType],
-    store: &mut Store,
-) -> Result<RedisType, CommandError> {
+fn handle_rpush(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
     let values = arguments[1..]
@@ -110,10 +107,7 @@ async fn handle_rpush(
     Ok(RedisType::Integer(new_length as i128))
 }
 
-async fn handle_lpush(
-    arguments: &[RedisType],
-    store: &mut Store,
-) -> Result<RedisType, CommandError> {
+fn handle_lpush(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
     let values = arguments[1..]
@@ -130,7 +124,7 @@ async fn handle_lpush(
     Ok(RedisType::Integer(new_length as i128))
 }
 
-async fn handle_lrange(arguments: &[RedisType], store: &Store) -> Result<RedisType, CommandError> {
+fn handle_lrange(arguments: &[RedisType], store: &Store) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
     let start: i128 = argument_as_number(arguments, 1)?;
     let end: i128 = argument_as_number(arguments, 2)?;
@@ -138,22 +132,19 @@ async fn handle_lrange(arguments: &[RedisType], store: &Store) -> Result<RedisTy
     let result = store.lrange(key.clone(), start, end);
 
     let response = if let Ok(values) = result {
-        RedisType::Array(
+        RedisType::Array(Some(
             values
                 .into_iter()
                 .map(|v| RedisType::BulkString(v))
                 .collect(),
-        )
+        ))
     } else {
-        RedisType::Array(vec![])
+        RedisType::Array(Some(vec![]))
     };
     Ok(response)
 }
 
-async fn handle_llen(
-    arguments: &[RedisType],
-    store: &mut Store,
-) -> Result<RedisType, CommandError> {
+fn handle_llen(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
     let len = store
@@ -163,10 +154,7 @@ async fn handle_llen(
     Ok(RedisType::Integer(len as i128))
 }
 
-async fn handle_lpop(
-    arguments: &[RedisType],
-    store: &mut Store,
-) -> Result<RedisType, CommandError> {
+fn handle_lpop(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
     let mut amount = 1;
 
@@ -184,12 +172,12 @@ async fn handle_lpop(
                 let element = &removed_elements[0];
                 Ok(RedisType::BulkString(element.clone()))
             } else {
-                let resp = RedisType::Array(
+                let resp = RedisType::Array(Some(
                     removed_elements
                         .into_iter()
                         .map(|element| RedisType::BulkString(element.clone()))
                         .collect(),
-                );
+                ));
                 Ok(resp)
             }
         }
@@ -198,30 +186,38 @@ async fn handle_lpop(
     }
 }
 
-async fn handle_blpop(
+fn handle_blpop(
     arguments: &[RedisType],
     store: &mut Store,
-    sender: oneshot::Sender<RedisType>,
-) -> Result<(), CommandError> {
+) -> Result<CommandResponse, CommandError> {
     let key = extract_key(arguments)?;
-    let _timeout: u128 = argument_as_number(arguments, 1)?;
+    let timeout: f64 = argument_as_number(arguments, 1)?;
 
     // Check if data available first
     if let Some(values) = store.lpop_for_blpop(key) {
         // Data available - send immediately
-        let response = RedisType::Array(
+        let response = RedisType::Array(Some(
             values
                 .into_iter()
                 .map(|element| RedisType::BulkString(element))
                 .collect(),
-        );
-        let _ = sender.send(response);
-        return Ok(());
+        ));
+        return Ok(CommandResponse::Immediate(response));
     }
 
     // No data - register for waiting
-    store.register_blocked_client(key.clone(), sender);
-    Ok(())
+    let (tx, rx) = oneshot::channel();
+    let identifier = store.register_blocked_client(key.clone(), tx);
+    println!(
+        "Waiting with timeout {} for client: {}",
+        timeout, identifier
+    );
+    Ok(CommandResponse::Wait {
+        timeout,
+        receiver: rx,
+        key: key.clone(),
+        client_id: identifier,
+    })
 }
 
 fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, CommandError> {
@@ -263,12 +259,22 @@ where
         .map_err(|_| CommandError::InvalidInput("Unable to parse argument to a number".into()))
 }
 
-pub async fn handle_command(
+#[derive(Debug)]
+pub enum CommandResponse {
+    Immediate(RedisType),
+    Wait {
+        timeout: f64,
+        receiver: oneshot::Receiver<RedisType>,
+        key: Bytes,
+        client_id: u64,
+    },
+}
+
+pub fn handle_command(
     input: RedisType,
     store: &mut Store,
-    sender: oneshot::Sender<RedisType>,
-) -> Result<(), CommandError> {
-    let RedisType::Array(elements) = input else {
+) -> Result<CommandResponse, CommandError> {
+    let RedisType::Array(Some(elements)) = input else {
         return Err(CommandError::InvalidInput(
             "The supplied input has an invalid format or redis type: Input needs to be of RedisType::Array".to_string(),
         ));
@@ -278,37 +284,21 @@ pub async fn handle_command(
 
     let arguments = &elements[1..];
 
-    // Handle BLPOP separately since it takes ownership of sender
-    if command == "BLPOP" {
-        let result = handle_blpop(arguments, store, sender).await;
-        return match result {
-            Ok(_response) => Ok(()), // Response already sent by blpop if immediate
-            Err(err) => match err {
-                CommandError::StoreError(StoreError::KeyNotFound | StoreError::KeyExpired) => {
-                    Ok(()) // Waiting - sender stored in queue, don't respond yet
-                }
-                _ => Err(err),
-            },
-        };
-    }
-
-    let result = match command.as_str() {
-        "PING" => handle_pong(arguments),
-        "ECHO" => handle_echo(arguments),
-        "LRANGE" => handle_lrange(arguments, store).await,
-        "RPUSH" => handle_rpush(arguments, store).await,
-        "LPUSH" => handle_lpush(arguments, store).await,
-        "GET" => handle_get(arguments, store).await,
-        "SET" => handle_set(arguments, store).await,
-        "LLEN" => handle_llen(arguments, store).await,
-        "LPOP" => handle_lpop(arguments, store).await,
+    match command.as_str() {
+        "PING" => Ok(CommandResponse::Immediate(handle_pong(arguments)?)),
+        "ECHO" => Ok(CommandResponse::Immediate(handle_echo(arguments)?)),
+        "LRANGE" => Ok(CommandResponse::Immediate(handle_lrange(arguments, store)?)),
+        "RPUSH" => Ok(CommandResponse::Immediate(handle_rpush(arguments, store)?)),
+        "LPUSH" => Ok(CommandResponse::Immediate(handle_lpush(arguments, store)?)),
+        "GET" => Ok(CommandResponse::Immediate(handle_get(arguments, store)?)),
+        "SET" => Ok(CommandResponse::Immediate(handle_set(arguments, store)?)),
+        "LLEN" => Ok(CommandResponse::Immediate(handle_llen(arguments, store)?)),
+        "LPOP" => Ok(CommandResponse::Immediate(handle_lpop(arguments, store)?)),
+        "BLPOP" => handle_blpop(arguments, store),
 
         _ => Err(CommandError::UnknownCommand(format!(
             "redis command {} not supported",
             command
         ))),
-    };
-    result.map(|response| {
-        let _ = sender.send(response);
-    })
+    }
 }

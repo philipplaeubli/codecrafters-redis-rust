@@ -1,7 +1,10 @@
 use std::{
     collections::{HashMap, VecDeque},
     ops::Deref,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, SystemTimeError, UNIX_EPOCH},
 };
 
@@ -29,8 +32,15 @@ impl From<SystemTimeError> for StoreError {
 pub struct Store {
     keys: HashMap<Bytes, WithExpiry>,
     lists: HashMap<Bytes, Vec<Bytes>>,
-    blpop_queue: HashMap<Bytes, VecDeque<oneshot::Sender<RedisType>>>,
+    blpop_queue: HashMap<Bytes, VecDeque<WaitingClient>>,
 }
+/// Represents a client waiting for data
+pub struct WaitingClient {
+    pub identifier: u64,
+    pub sender: oneshot::Sender<RedisType>,
+}
+
+static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(0);
 
 impl Store {
     pub fn new() -> Self {
@@ -44,26 +54,20 @@ impl Store {
     pub fn rpush(&mut self, key: Bytes, values: Vec<Bytes>) -> Result<usize, StoreError> {
         let list = self.lists.entry(key.clone()).or_default();
         list.append(&mut values.clone());
+        let len = list.len();
+        self.notify_blocked_clients(&key);
 
-        if let Some(q) = self.blpop_queue.get_mut(&key.clone()) {
-            if let Some(reply) = q.pop_front() {
-                let mut response: Vec<RedisType> = values
-                    .iter()
-                    .map(|v| RedisType::BulkString(v.clone()))
-                    .collect();
-                response.insert(0, RedisType::BulkString(key.clone()));
-                let _ = reply.send(RedisType::Array(response));
-            }
-        }
-
-        Ok(list.len())
+        Ok(len)
     }
 
     pub fn lpush(&mut self, key: Bytes, mut values: Vec<Bytes>) -> Result<usize, StoreError> {
-        let list = self.lists.entry(key).or_default();
+        let list = self.lists.entry(key.clone()).or_default();
         values.reverse(); // reverse the order of the values
         list.splice(0..0, values); //  inserts all the values at the beginning of the list
-        Ok(list.len())
+        let len = list.len();
+        self.notify_blocked_clients(&key);
+
+        Ok(len)
     }
 
     pub fn get(&self, key: Bytes) -> Result<Bytes, StoreError> {
@@ -162,9 +166,60 @@ impl Store {
         Some(removed)
     }
 
-    /// Registers a blocked client waiting for data on this key
-    pub fn register_blocked_client(&mut self, key: Bytes, sender: oneshot::Sender<RedisType>) {
-        self.blpop_queue.entry(key).or_default().push_back(sender);
+    pub fn register_blocked_client(
+        &mut self,
+        key: Bytes,
+        sender: oneshot::Sender<RedisType>,
+    ) -> u64 {
+        let identifier = NEXT_CLIENT_ID.fetch_add(1, Ordering::SeqCst);
+        let client = WaitingClient { identifier, sender };
+
+        self.blpop_queue.entry(key).or_default().push_back(client);
+
+        identifier
+    }
+
+    pub fn remove_blocked_client(&mut self, key: &Bytes, client_id: u64) {
+        if let Some(queue) = self.blpop_queue.get_mut(key) {
+            queue.retain(|client| client.identifier != client_id);
+
+            // Clean up empty queues
+            if queue.is_empty() {
+                self.blpop_queue.remove(key);
+            }
+        }
+    }
+
+    fn notify_blocked_clients(&mut self, key: &Bytes) {
+        let Some(queue) = self.blpop_queue.get_mut(key) else {
+            return;
+        };
+
+        let Some(list) = self.lists.get_mut(key) else {
+            return;
+        };
+
+        if list.is_empty() {
+            return;
+        }
+
+        if let Some(waiting_client) = queue.pop_front() {
+            let value = list.remove(0);
+            let response = RedisType::Array(Some(vec![
+                RedisType::BulkString(key.clone()),
+                RedisType::BulkString(value),
+            ]));
+
+            if waiting_client.sender.send(response).is_ok() {
+                return;
+            }
+            // Send failed (client timed out?)
+        }
+
+        // Clean up empty queue
+        if queue.is_empty() {
+            self.blpop_queue.remove(key);
+        }
     }
 }
 #[test]

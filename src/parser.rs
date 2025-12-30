@@ -9,7 +9,7 @@ pub enum RedisType {
     Integer(i128),
     NullBulkString,
     SimpleError(Bytes),
-    Array(Vec<RedisType>),
+    Array(Option<Vec<RedisType>>),
 }
 #[derive(Debug, PartialEq)]
 pub enum RespParseError {
@@ -50,11 +50,15 @@ impl RedisType {
                 out.extend_from_slice(b"\r\n");
             }
             RedisType::Array(items) => {
-                out.extend_from_slice(b"*");
-                out.extend_from_slice(items.len().to_string().as_bytes());
-                out.extend_from_slice(b"\r\n");
-                for item in items {
-                    item.encode(out);
+                if let Some(items) = items {
+                    out.extend_from_slice(b"*");
+                    out.extend_from_slice(items.len().to_string().as_bytes());
+                    out.extend_from_slice(b"\r\n");
+                    for item in items {
+                        item.encode(out);
+                    }
+                } else {
+                    out.extend_from_slice(b"*-1\r\n"); // return a null array https://redis.io/docs/latest/develop/reference/protocol-spec/#null-arrays
                 }
             }
             RedisType::NullBulkString => {
@@ -117,7 +121,7 @@ fn parse_array(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
         }
     }
 
-    Ok(RedisType::Array(elements))
+    Ok(RedisType::Array(Some(elements)))
 }
 
 fn parse_bulk_string(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
@@ -296,19 +300,25 @@ fn test_parse_lrange_array() {
 
     assert_eq!(
         parse_array(&mut input),
-        Ok(RedisType::Array(vec![
+        Ok(RedisType::Array(Some(vec![
             RedisType::BulkString(BytesMut::from("LRANGE").freeze()),
             RedisType::BulkString(BytesMut::from("pear").freeze()),
             RedisType::BulkString(BytesMut::from("-3").freeze()),
             RedisType::BulkString(BytesMut::from("-1").freeze()),
-        ]))
+        ])))
     );
 }
 
 #[test]
 fn test_parse_array_empty_array() {
     let mut input = BytesMut::from("*0\r\n");
-    assert_eq!(parse_array(&mut input), Ok(RedisType::Array(vec![])));
+    assert_eq!(parse_array(&mut input), Ok(RedisType::Array(Some(vec![]))));
+}
+
+#[test]
+fn test_parse_array_null_array() {
+    let mut input = BytesMut::from("*-1\r\n");
+    assert_eq!(parse_array(&mut input), Ok(RedisType::Array(None)));
 }
 
 #[test]
@@ -319,7 +329,7 @@ fn test_parse_array_large_string_array() {
 
     assert_eq!(
         parse_array(&mut buffer),
-        Ok(RedisType::Array(vec![
+        Ok(RedisType::Array(Some(vec![
             RedisType::BulkString(BytesMut::from("hello").freeze()),
             RedisType::BulkString(BytesMut::from("hello").freeze()),
             RedisType::BulkString(BytesMut::from("hello").freeze()),
@@ -330,7 +340,7 @@ fn test_parse_array_large_string_array() {
             RedisType::BulkString(BytesMut::from("hello").freeze()),
             RedisType::BulkString(BytesMut::from("hello").freeze()),
             RedisType::BulkString(BytesMut::from("hello").freeze()),
-        ]))
+        ])))
     )
 }
 #[test]
@@ -340,13 +350,13 @@ fn test_parse_array_nested_array() {
 
     assert_eq!(
         parse_array(&mut input),
-        Ok(RedisType::Array(vec![
+        Ok(RedisType::Array(Some(vec![
             RedisType::BulkString(BytesMut::from("foo").freeze()),
-            RedisType::Array(vec![
+            RedisType::Array(Some(vec![
                 RedisType::BulkString(BytesMut::from("hello").freeze()),
                 RedisType::BulkString(BytesMut::from("world").freeze()),
-            ],),
+            ])),
             RedisType::BulkString(BytesMut::from("bar").freeze()),
-        ],))
+        ])))
     );
 }
