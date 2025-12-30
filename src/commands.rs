@@ -207,6 +207,12 @@ fn handle_blpop(
     })
 }
 
+fn handle_type(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
+    let key = extract_key(arguments)?;
+    let key_type = store.get_type(key).map_err(CommandError::StoreError)?;
+    Ok(RedisType::SimpleString(key_type))
+}
+
 fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, CommandError> {
     let bytes = match arguments.get(index) {
         Some(RedisType::BulkString(b)) => b,
@@ -281,6 +287,7 @@ pub fn handle_command(
         "SET" => Ok(CommandResponse::Immediate(handle_set(arguments, store)?)),
         "LLEN" => Ok(CommandResponse::Immediate(handle_llen(arguments, store)?)),
         "LPOP" => Ok(CommandResponse::Immediate(handle_lpop(arguments, store)?)),
+        "TYPE" => Ok(CommandResponse::Immediate(handle_type(arguments, store)?)),
         "BLPOP" => handle_blpop(arguments, store),
 
         _ => Err(CommandError::UnknownCommand(format!(
