@@ -28,7 +28,7 @@ impl From<SystemTimeError> for StoreError {
 pub struct Store {
     keys: HashMap<Bytes, WithExpiry>,
     lists: HashMap<Bytes, Vec<Bytes>>,
-    blpop_queue: HashMap<Bytes, VecDeque<WaitingClient>>,
+    blpop_waiting_queue: HashMap<Bytes, VecDeque<WaitingClient>>,
 }
 /// Represents a client waiting for data
 pub struct WaitingClient {
@@ -43,7 +43,7 @@ impl Store {
         Store {
             keys: HashMap::new(),
             lists: HashMap::new(),
-            blpop_queue: HashMap::new(),
+            blpop_waiting_queue: HashMap::new(),
         }
     }
 
@@ -51,7 +51,7 @@ impl Store {
         let list = self.lists.entry(key.clone()).or_default();
         list.append(&mut values.clone());
         let len = list.len();
-        self.notify_blocked_clients(&key);
+        self.notify_first_waiting_client(&key);
 
         Ok(len)
     }
@@ -61,7 +61,7 @@ impl Store {
         values.reverse(); // reverse the order of the values
         list.splice(0..0, values); //  inserts all the values at the beginning of the list
         let len = list.len();
-        self.notify_blocked_clients(&key);
+        self.notify_first_waiting_client(&key);
 
         Ok(len)
     }
@@ -162,7 +162,7 @@ impl Store {
         Some(removed)
     }
 
-    pub fn register_blocked_client(
+    pub fn register_waiting_client(
         &mut self,
         key: Bytes,
         sender: oneshot::Sender<RedisType>,
@@ -170,24 +170,27 @@ impl Store {
         let identifier = NEXT_CLIENT_ID.fetch_add(1, Ordering::SeqCst);
         let client = WaitingClient { identifier, sender };
 
-        self.blpop_queue.entry(key).or_default().push_back(client);
+        self.blpop_waiting_queue
+            .entry(key)
+            .or_default()
+            .push_back(client);
 
         identifier
     }
 
-    pub fn remove_blocked_client(&mut self, key: &Bytes, client_id: u64) {
-        if let Some(queue) = self.blpop_queue.get_mut(key) {
+    pub fn remove_waiting_client(&mut self, key: &Bytes, client_id: u64) {
+        if let Some(queue) = self.blpop_waiting_queue.get_mut(key) {
             queue.retain(|client| client.identifier != client_id);
 
             // Clean up empty queues
             if queue.is_empty() {
-                self.blpop_queue.remove(key);
+                self.blpop_waiting_queue.remove(key);
             }
         }
     }
 
-    fn notify_blocked_clients(&mut self, key: &Bytes) {
-        let Some(queue) = self.blpop_queue.get_mut(key) else {
+    fn notify_first_waiting_client(&mut self, key: &Bytes) {
+        let Some(queue) = self.blpop_waiting_queue.get_mut(key) else {
             return;
         };
 
@@ -214,7 +217,7 @@ impl Store {
 
         // Clean up empty queue
         if queue.is_empty() {
-            self.blpop_queue.remove(key);
+            self.blpop_waiting_queue.remove(key);
         }
     }
 }

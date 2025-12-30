@@ -202,7 +202,7 @@ fn handle_blpop(
 
     // No data - register for waiting
     let (tx, rx) = oneshot::channel();
-    let identifier = store.register_blocked_client(key.clone(), tx);
+    let identifier = store.register_waiting_client(key.clone(), tx);
     println!(
         "Waiting with timeout {} for client: {}",
         timeout, identifier

@@ -151,7 +151,7 @@ async fn main() -> io::Result<()> {
                         "Cleaning up blocked client {} for key {:?}",
                         identifier, key
                     );
-                    store.remove_blocked_client(&key, identifier);
+                    store.remove_waiting_client(&key, identifier);
                 }
             }
         }
