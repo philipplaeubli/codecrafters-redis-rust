@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{fmt::Display, time::Duration};
 
 use bytes::{Bytes, BytesMut};
 use tokio::{
@@ -165,22 +165,26 @@ async fn main() -> io::Result<()> {
         let sender = tx.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_connection(stream, &sender).await {
-                // Handle errors here
-
-                match e {
-                    RedisError::ParseError(resp_parse_error) => match resp_parse_error {
-                        RespParseError::InvalidFormat => {
-                            eprintln!("Invalid format")
-                        }
-                    },
-                    RedisError::IoError(error) => {
-                        eprintln!("IO error: {:?}", error)
-                    }
-                    RedisError::TokioError => {
-                        eprintln!("Unknown async error")
-                    }
-                }
+                eprintln!("Error: {}", e);
             }
         });
+    }
+}
+
+impl Display for RedisError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RedisError::ParseError(resp_parse_error) => match resp_parse_error {
+                RespParseError::InvalidFormat => {
+                    write!(f, "Invalid RESP format")
+                }
+            },
+            RedisError::IoError(error) => {
+                write!(f, "IO error: {:?}", error)
+            }
+            RedisError::TokioError => {
+                write!(f, "Unknown async error")
+            }
+        }
     }
 }
