@@ -221,7 +221,7 @@ impl Store {
 #[test]
 fn test_lpush() {
     let mut store = Store::new();
-    let key = BytesMut::from("test").freeze();
+    let key = bytes::BytesMut::from("test").freeze();
     let _ = store.lpush(key.clone(), vec!["c".into(), "b".into(), "a".into()]);
 
     let result = store.lrange(key.clone(), 0, -1).unwrap();

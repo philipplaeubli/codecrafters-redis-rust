@@ -12,7 +12,7 @@ use tokio::{
 };
 
 use crate::{
-    commands::{CommandError, CommandResponse, handle_command},
+    commands::{CommandResponse, handle_command},
     parser::{RedisType, RespParseError, parse_resp},
     store::Store,
 };
@@ -23,7 +23,6 @@ mod store;
 #[derive(Debug)]
 enum RedisError {
     ParseError(RespParseError),
-    CommandError(CommandError),
     IoError(io::Error),
     TokioError,
 }
@@ -173,25 +172,6 @@ async fn main() -> io::Result<()> {
                         RespParseError::InvalidFormat => {
                             eprintln!("Invalid format")
                         }
-                    },
-                    RedisError::CommandError(command_error) => match command_error {
-                        CommandError::InvalidInput(message) => {
-                            eprintln!("Command Error - Invalid input: {}", message)
-                        }
-                        CommandError::UnknownCommand(message) => {
-                            eprintln!("Command Error - Unknown command: {}", message)
-                        }
-                        CommandError::StoreError(store_error) => match store_error {
-                            store::StoreError::KeyNotFound => {
-                                eprintln!("Store Error - Key not found")
-                            }
-                            store::StoreError::KeyExpired => {
-                                eprintln!("Store Error - Key expired")
-                            }
-                            store::StoreError::TimeError => {
-                                eprintln!("Store Error - Time conversion error")
-                            }
-                        },
                     },
                     RedisError::IoError(error) => {
                         eprintln!("IO error: {:?}", error)
