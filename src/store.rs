@@ -151,12 +151,15 @@ impl Store {
     }
 
     pub fn get_type(&self, key: &Bytes) -> Result<Bytes, StoreError> {
-        match self.keys.get(key) {
-            Some(WithExpiry {
-                value: _,
-                expires: _,
-            }) => Ok(Bytes::from("string")),
-            None => Ok(Bytes::from("none")),
+        let key_type = self.key_types.get(key);
+        if let Some(key_type) = key_type {
+            match key_type {
+                KeyType::Key => Ok(Bytes::from("string")),
+                KeyType::List => Ok(Bytes::from("list")),
+                KeyType::Stream => Ok(Bytes::from("stream")),
+            }
+        } else {
+            return Ok(Bytes::from("none"));
         }
     }
 
