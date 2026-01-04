@@ -27,8 +27,15 @@ impl From<SystemTimeError> for StoreError {
     }
 }
 
+enum KeyType {
+    Key,
+    List,
+    Stream,
+}
+
 #[derive(Default)]
 pub struct Store {
+    key_types: HashMap<Bytes, KeyType>,
     keys: HashMap<Bytes, WithExpiry>,
     lists: HashMap<Bytes, Vec<Bytes>>,
     blpop_waiting_queue: HashMap<Bytes, VecDeque<WaitingClient>>,
@@ -47,6 +54,7 @@ impl Store {
     }
 
     pub fn rpush(&mut self, key: Bytes, values: Vec<Bytes>) -> Result<usize, StoreError> {
+        self.key_types.insert(key.clone(), KeyType::List);
         let list = self.lists.entry(key.clone()).or_default();
         list.extend(values);
 
@@ -56,6 +64,7 @@ impl Store {
     }
 
     pub fn lpush(&mut self, key: Bytes, mut values: Vec<Bytes>) -> Result<usize, StoreError> {
+        self.key_types.insert(key.clone(), KeyType::List);
         let list = self.lists.entry(key.clone()).or_default();
         values.reverse(); // reverse the order of the values
         list.splice(0..0, values); //  inserts all the values at the beginning of the list
@@ -124,6 +133,7 @@ impl Store {
         value: Bytes,
         expiry: Option<u128>,
     ) -> Result<(), StoreError> {
+        self.key_types.insert(key.clone(), KeyType::Key);
         let mut expires: Option<u128> = None;
         if let Some(expiry) = expiry {
             let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
