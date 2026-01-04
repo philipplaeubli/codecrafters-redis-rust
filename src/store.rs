@@ -20,6 +20,8 @@ pub enum StoreError {
     KeyExpired,
     TimeError,
     InvalidKey,
+    StreamIdSmallerThanLast,
+    StreamIdNotGreaterThan0,
 }
 
 impl From<SystemTimeError> for StoreError {
@@ -264,19 +266,36 @@ impl Store {
         args: &[RedisType],
     ) -> Result<StreamId, StoreError> {
         self.key_types.insert(stream_key.clone(), KeyType::Stream);
-        self.streams
-            .entry(stream_key.clone())
-            .and_modify(|btree| {
+        let zero_stream_id = StreamId { ms: 0, seq: 0 };
+        if stream_id <= zero_stream_id {
+            return Err(StoreError::StreamIdNotGreaterThan0);
+        }
+
+        match self.streams.entry(stream_key.clone()) {
+            std::collections::hash_map::Entry::Occupied(mut existing_entry) => {
+                let btree = existing_entry.get_mut();
+                match btree.last_key_value() {
+                    Some((last_id, _)) => {
+                        if last_id >= &stream_id {
+                            Err(StoreError::StreamIdSmallerThanLast)
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    None => Ok(()),
+                }?;
+
                 let mut map = btree.entry(stream_id).or_default();
                 insert_keys_and_values(args, &mut map);
-            })
-            .or_insert_with(|| {
-                let mut btree = BTreeMap::new();
-                let mut map = HashMap::new();
+            }
+            std::collections::hash_map::Entry::Vacant(vacant_entry) => {
+                let mut btree: BTreeMap<StreamId, HashMap<Bytes, Bytes>> = BTreeMap::new();
+                let mut map: HashMap<Bytes, Bytes> = HashMap::new();
                 insert_keys_and_values(args, &mut map);
                 btree.insert(stream_id, map);
-                btree
-            });
+                vacant_entry.insert(btree);
+            }
+        }
 
         Ok(stream_id)
     }
@@ -322,6 +341,10 @@ impl Display for StoreError {
             StoreError::KeyExpired => write!(f, "Key expired"),
             StoreError::TimeError => write!(f, "Could not convert time or expiry"),
             StoreError::InvalidKey => write!(f, "Key is in invalid format"),
+            StoreError::StreamIdSmallerThanLast => {
+                write!(f, "Stream ID smaller than last added Id")
+            }
+            StoreError::StreamIdNotGreaterThan0 => write!(f, "Stream ID must be greater than 0-0"),
         }
     }
 }

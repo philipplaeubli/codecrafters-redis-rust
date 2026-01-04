@@ -46,6 +46,12 @@ fn handle_get(arguments: &[RedisType], store: &Store) -> Result<RedisType, Comma
         Err(StoreError::InvalidKey) => Err(CommandError::InvalidInput(
             "Key in in an invalid format".into(),
         )),
+        Err(StoreError::StreamIdSmallerThanLast) => Err(CommandError::InvalidInput(
+            "Stream ID is smaller than the last ID".into(),
+        )),
+        Err(StoreError::StreamIdNotGreaterThan0) => Err(CommandError::InvalidInput(
+            "Stream ID must be greater than 0-0".into(),
+        )),
     }
 }
 
@@ -258,11 +264,26 @@ fn handle_xadd(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, 
             ));
         }
     };
-    let stream_id = store
-        .xadd(key, stream_id, &arguments[2..])
-        .map_err(|_| CommandError::InvalidInput("Unable to add to stream".to_string()))?;
-
-    Ok(stream_id.into())
+    match store.xadd(key, stream_id, &arguments[2..]) {
+        Ok(id) => Ok(id.into()),
+        Err(StoreError::StreamIdSmallerThanLast) => {
+            return Ok(RedisType::SimpleError(
+                "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+                    .into(),
+            ));
+        }
+        Err(StoreError::StreamIdNotGreaterThan0) => {
+            return Ok(RedisType::SimpleError(
+                "ERR The ID specified in XADD must be greater than 0-0".into(),
+            ));
+        }
+        Err(other) => {
+            return Err(CommandError::InvalidInput(format!(
+                "Unable to add to stream: {:?}",
+                other
+            )));
+        }
+    }
 }
 
 fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, CommandError> {
