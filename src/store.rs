@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     fmt::Display,
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, SystemTimeError, UNIX_EPOCH},
@@ -19,6 +19,7 @@ pub enum StoreError {
     KeyNotFound,
     KeyExpired,
     TimeError,
+    InvalidKey,
 }
 
 impl From<SystemTimeError> for StoreError {
@@ -36,10 +37,17 @@ enum KeyType {
 #[derive(Default)]
 pub struct Store {
     key_types: HashMap<Bytes, KeyType>,
+    streams: HashMap<Bytes, BTreeMap<StreamId, HashMap<Bytes, Bytes>>>,
     keys: HashMap<Bytes, WithExpiry>,
     lists: HashMap<Bytes, Vec<Bytes>>,
     blpop_waiting_queue: HashMap<Bytes, VecDeque<WaitingClient>>,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct StreamId {
+    pub ms: u64,
+    pub seq: u64,
+}
+
 /// Represents a client waiting for data
 pub struct WaitingClient {
     pub identifier: u64,
@@ -47,6 +55,12 @@ pub struct WaitingClient {
 }
 
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(0);
+
+impl Into<RedisType> for StreamId {
+    fn into(self) -> RedisType {
+        RedisType::BulkString(format!("{}-{}", self.ms, self.seq).into())
+    }
+}
 
 impl Store {
     pub fn new() -> Self {
@@ -242,7 +256,40 @@ impl Store {
             self.blpop_waiting_queue.remove(key);
         }
     }
+
+    pub fn xadd(
+        &mut self,
+        stream_key: &Bytes,
+        stream_id: StreamId,
+        args: &[RedisType],
+    ) -> Result<StreamId, StoreError> {
+        self.key_types.insert(stream_key.clone(), KeyType::Stream);
+        self.streams
+            .entry(stream_key.clone())
+            .and_modify(|btree| {
+                let mut map = btree.entry(stream_id).or_default();
+                insert_keys_and_values(args, &mut map);
+            })
+            .or_insert_with(|| {
+                let mut btree = BTreeMap::new();
+                let mut map = HashMap::new();
+                insert_keys_and_values(args, &mut map);
+                btree.insert(stream_id, map);
+                btree
+            });
+
+        Ok(stream_id)
+    }
 }
+
+fn insert_keys_and_values(arguments: &[RedisType], map: &mut HashMap<Bytes, Bytes>) {
+    for chunk in arguments[0..].chunks_exact(2) {
+        let field = &chunk[0];
+        let value = &chunk[1];
+        map.insert(field.to_bytes(), value.to_bytes());
+    }
+}
+
 #[test]
 fn test_lpush() {
     let mut store = Store::new();
@@ -274,6 +321,7 @@ impl Display for StoreError {
             StoreError::KeyNotFound => write!(f, "Key not found"),
             StoreError::KeyExpired => write!(f, "Key expired"),
             StoreError::TimeError => write!(f, "Could not convert time or expiry"),
+            StoreError::InvalidKey => write!(f, "Key is in invalid format"),
         }
     }
 }

@@ -5,7 +5,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     parser::RedisType,
-    store::{Store, StoreError},
+    store::{Store, StoreError, StreamId},
 };
 
 #[derive(Debug)]
@@ -38,9 +38,13 @@ fn handle_get(arguments: &[RedisType], store: &Store) -> Result<RedisType, Comma
     match value {
         Ok(value) => Ok(RedisType::BulkString(value.clone())),
         Err(StoreError::KeyExpired) => Ok(RedisType::NullBulkString), // we handle key expiration and return a null bulk string
+
         Err(StoreError::KeyNotFound) => Ok(RedisType::NullBulkString),
         Err(StoreError::TimeError) => Err(CommandError::InvalidInput(
             "Unable to convert expiry to unix timestamp".into(),
+        )),
+        Err(StoreError::InvalidKey) => Err(CommandError::InvalidInput(
+            "Key in in an invalid format".into(),
         )),
     }
 }
@@ -213,6 +217,54 @@ fn handle_type(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, 
     Ok(RedisType::SimpleString(key_type))
 }
 
+fn handle_xadd(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
+    let key = extract_key(arguments)?;
+
+    let stream_id = match &arguments[1] {
+        RedisType::BulkString(bytes) => {
+            let pos = bytes.windows(1).position(|something| something == [b'-']);
+
+            if let Some(pos) = pos {
+                let str_ms = str::from_utf8(&bytes[0..pos]).map_err(|_err| {
+                    CommandError::InvalidInput(
+                        "Unable to parse first stream key id part".to_string(),
+                    )
+                })?;
+                let ms = str_ms.parse().map_err(|_| {
+                    CommandError::InvalidInput(
+                        "Unable to convert first stream key id part to integer".to_string(),
+                    )
+                })?;
+
+                let str_seq = str::from_utf8(&bytes[pos + 1..]).map_err(|_err| {
+                    CommandError::InvalidInput(
+                        "Unable to parse second stream key id part".to_string(),
+                    )
+                })?;
+                let seq = str_seq.parse().map_err(|_| {
+                    CommandError::InvalidInput(
+                        "Unable to convert second stream key id part to integer".to_string(),
+                    )
+                })?;
+
+                StreamId { ms, seq }
+            } else {
+                StreamId { ms: 0, seq: 0 }
+            }
+        }
+        _ => {
+            return Err(CommandError::InvalidInput(
+                "Stream id must be bulk string".to_string(),
+            ));
+        }
+    };
+    let stream_id = store
+        .xadd(key, stream_id, &arguments[2..])
+        .map_err(|_| CommandError::InvalidInput("Unable to add to stream".to_string()))?;
+
+    Ok(stream_id.into())
+}
+
 fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, CommandError> {
     let bytes = match arguments.get(index) {
         Some(RedisType::BulkString(b)) => b,
@@ -288,6 +340,7 @@ pub fn handle_command(
         "LLEN" => Ok(CommandResponse::Immediate(handle_llen(arguments, store)?)),
         "LPOP" => Ok(CommandResponse::Immediate(handle_lpop(arguments, store)?)),
         "TYPE" => Ok(CommandResponse::Immediate(handle_type(arguments, store)?)),
+        "XADD" => Ok(CommandResponse::Immediate(handle_xadd(arguments, store)?)),
         "BLPOP" => handle_blpop(arguments, store),
 
         _ => Err(CommandError::UnknownCommand(format!(
