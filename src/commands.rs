@@ -43,9 +43,7 @@ fn handle_get(arguments: &[RedisType], store: &Store) -> Result<RedisType, Comma
         Err(StoreError::TimeError) => Err(CommandError::InvalidInput(
             "Unable to convert expiry to unix timestamp".into(),
         )),
-        Err(StoreError::InvalidKey) => Err(CommandError::InvalidInput(
-            "Key in in an invalid format".into(),
-        )),
+
         Err(StoreError::StreamIdSmallerThanLast) => Err(CommandError::InvalidInput(
             "Stream ID is smaller than the last ID".into(),
         )),
@@ -266,23 +264,17 @@ fn handle_xadd(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, 
     };
     match store.xadd(key, stream_id, &arguments[2..]) {
         Ok(id) => Ok(id.into()),
-        Err(StoreError::StreamIdSmallerThanLast) => {
-            return Ok(RedisType::SimpleError(
-                "ERR The ID specified in XADD is equal or smaller than the target stream top item"
-                    .into(),
-            ));
-        }
-        Err(StoreError::StreamIdNotGreaterThan0) => {
-            return Ok(RedisType::SimpleError(
-                "ERR The ID specified in XADD must be greater than 0-0".into(),
-            ));
-        }
-        Err(other) => {
-            return Err(CommandError::InvalidInput(format!(
-                "Unable to add to stream: {:?}",
-                other
-            )));
-        }
+        Err(StoreError::StreamIdSmallerThanLast) => Ok(RedisType::SimpleError(
+            "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+                .into(),
+        )),
+        Err(StoreError::StreamIdNotGreaterThan0) => Ok(RedisType::SimpleError(
+            "ERR The ID specified in XADD must be greater than 0-0".into(),
+        )),
+        Err(other) => Err(CommandError::InvalidInput(format!(
+            "Unable to add to stream: {:?}",
+            other
+        ))),
     }
 }
 

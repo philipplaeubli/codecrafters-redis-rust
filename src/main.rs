@@ -123,7 +123,7 @@ async fn main() -> io::Result<()> {
 
     // setting up the central data store (ARC at the moment / automated referece counting)
 
-    let _ = tokio::spawn(async move {
+    tokio::spawn(async move {
         // Start receiving messages
         let mut store = Store::new();
 

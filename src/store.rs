@@ -19,7 +19,6 @@ pub enum StoreError {
     KeyNotFound,
     KeyExpired,
     TimeError,
-    InvalidKey,
     StreamIdSmallerThanLast,
     StreamIdNotGreaterThan0,
 }
@@ -58,9 +57,9 @@ pub struct WaitingClient {
 
 static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(0);
 
-impl Into<RedisType> for StreamId {
-    fn into(self) -> RedisType {
-        RedisType::BulkString(format!("{}-{}", self.ms, self.seq).into())
+impl From<StreamId> for RedisType {
+    fn from(value: StreamId) -> Self {
+        RedisType::BulkString(format!("{}-{}", value.ms, value.seq).into())
     }
 }
 
@@ -175,7 +174,7 @@ impl Store {
                 KeyType::Stream => Ok(Bytes::from("stream")),
             }
         } else {
-            return Ok(Bytes::from("none"));
+            Ok(Bytes::from("none"))
         }
     }
 
@@ -285,8 +284,7 @@ impl Store {
                     None => Ok(()),
                 }?;
 
-                let mut map = btree.entry(stream_id).or_default();
-                insert_keys_and_values(args, &mut map);
+                insert_keys_and_values(args, btree.entry(stream_id).or_default());
             }
             std::collections::hash_map::Entry::Vacant(vacant_entry) => {
                 let mut btree: BTreeMap<StreamId, HashMap<Bytes, Bytes>> = BTreeMap::new();
@@ -340,7 +338,6 @@ impl Display for StoreError {
             StoreError::KeyNotFound => write!(f, "Key not found"),
             StoreError::KeyExpired => write!(f, "Key expired"),
             StoreError::TimeError => write!(f, "Could not convert time or expiry"),
-            StoreError::InvalidKey => write!(f, "Key is in invalid format"),
             StoreError::StreamIdSmallerThanLast => {
                 write!(f, "Stream ID smaller than last added Id")
             }
