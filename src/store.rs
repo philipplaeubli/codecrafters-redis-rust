@@ -156,11 +156,15 @@ impl Store {
         expiry: Option<u128>,
     ) -> Result<(), StoreError> {
         self.key_types.insert(key.clone(), KeyType::Key);
-        let mut expires: Option<u128> = None;
-        if let Some(expiry) = expiry {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-            expires = Some(now + expiry);
-        }
+
+        let expires = expiry
+            .map(|ex| {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .and_then(|dur| Ok(dur.as_millis() + ex));
+                now
+            })
+            .transpose()?;
 
         let key_value = WithExpiry { value, expires };
         self.keys.insert(key, key_value);
