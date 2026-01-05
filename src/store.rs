@@ -45,8 +45,8 @@ pub struct Store {
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct StreamId {
-    pub ms: u64,
-    pub seq: u64,
+    pub ms: u128,
+    pub seq: u128,
 }
 
 /// Represents a client waiting for data
@@ -261,8 +261,8 @@ impl Store {
     pub fn xadd(
         &mut self,
         stream_key: &Bytes,
-        seq: Option<u64>,
-        ms: Option<u64>,
+        seq: Option<u128>,
+        ms: Option<u128>,
         args: &[RedisType],
     ) -> Result<StreamId, StoreError> {
         self.key_types.insert(stream_key.clone(), KeyType::Stream);
@@ -282,23 +282,23 @@ impl Store {
         } else {
             let opt_btree = self.streams.get(stream_key);
 
-            if !ms.is_none()
-                && seq.is_none()
-                && let Some(existing_btree) = opt_btree
-            {
+            if !ms.is_none() && seq.is_none() {
                 println!("seq is set but ms is not");
-                let new_ms = ms.unwrap_or(0);
-                let last_id = existing_btree
-                    .last_key_value()
-                    .map(|(id, _)| id)
-                    .unwrap_or(&zero_stream_id);
-
+                let new_ms =
+                    ms.unwrap_or(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis());
                 let mut new_seq = 1;
-                if new_ms > 0 {
-                    new_seq = 0;
-                }
-                if last_id.ms == new_ms {
-                    new_seq = last_id.seq + 1;
+                if let Some(existing_btree) = opt_btree {
+                    let last_id = existing_btree
+                        .last_key_value()
+                        .map(|(id, _)| id)
+                        .unwrap_or(&zero_stream_id);
+
+                    if new_ms > 0 {
+                        new_seq = 0;
+                    }
+                    if last_id.ms == new_ms {
+                        new_seq = last_id.seq + 1;
+                    }
                 }
 
                 StreamId {
@@ -306,6 +306,8 @@ impl Store {
                     seq: new_seq,
                 }
             } else {
+                let new_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+
                 if let Some(existing_btree) = opt_btree {
                     let last_id = existing_btree
                         .last_key_value()
@@ -317,8 +319,8 @@ impl Store {
                     }
                 } else {
                     StreamId {
-                        ms: ms.unwrap_or(0),
-                        seq: seq.unwrap_or(1),
+                        ms: ms.unwrap_or(new_ms),
+                        seq: seq.unwrap_or(0),
                     }
                 }
             }
