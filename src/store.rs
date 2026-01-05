@@ -173,16 +173,14 @@ impl Store {
     }
 
     pub fn get_type(&self, key: &Bytes) -> Result<Bytes, StoreError> {
-        let key_type = self.key_types.get(key);
-        if let Some(key_type) = key_type {
-            match key_type {
-                KeyType::Key => Ok(Bytes::from("string")),
-                KeyType::List => Ok(Bytes::from("list")),
-                KeyType::Stream => Ok(Bytes::from("stream")),
-            }
-        } else {
-            Ok(Bytes::from("none"))
-        }
+        self.key_types
+            .get(key)
+            .map(|kt| match kt {
+                KeyType::Key => Bytes::from("string"),
+                KeyType::List => Bytes::from("list"),
+                KeyType::Stream => Bytes::from("stream"),
+            })
+            .ok_or(StoreError::KeyNotFound)
     }
 
     pub fn lpop(&mut self, key: Bytes, amount: i128) -> Result<Vec<Bytes>, StoreError> {
