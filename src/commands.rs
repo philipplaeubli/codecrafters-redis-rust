@@ -307,29 +307,25 @@ fn handle_xrange(arguments: &[RedisType], store: &mut Store) -> Result<RedisType
     let (start_ms, start_sq) = extract_stream_id_values(&arguments[1])?;
     let (end_ms, end_sq) = extract_stream_id_values(&arguments[2])?;
     let start_stream_id = if start_ms.is_some() {
-        StreamId {
+        Some(StreamId {
             ms: start_ms.unwrap(),
             seq: start_sq.unwrap_or(0),
-        }
+        })
     } else {
-        return Err(CommandError::InvalidInput(
-            "Invalid start stream id".to_string(),
-        ));
+        None
     };
     let end_stream_id = if end_ms.is_some() {
-        StreamId {
+        Some(StreamId {
             ms: end_ms.unwrap(),
             seq: end_sq.unwrap_or(0),
-        }
+        })
     } else {
-        return Err(CommandError::InvalidInput(
-            "Invalid start stream id".to_string(),
-        ));
+        None
     };
-    println!("Start stream id: {:?}", start_stream_id);
-    println!("End stream id: {:?}", end_stream_id);
+
     let results = store.xrange(stream_key, start_stream_id, end_stream_id);
-    let x: Vec<RedisType> = results
+
+    let result: Vec<RedisType> = results
         .iter()
         .map(|entry| {
             let mut entries = Vec::new();
@@ -341,7 +337,7 @@ fn handle_xrange(arguments: &[RedisType], store: &mut Store) -> Result<RedisType
             RedisType::Array(Some(vec![entry.0.into(), RedisType::Array(Some(entries))]))
         })
         .collect();
-    Ok(RedisType::Array(Some(x)))
+    Ok(RedisType::Array(Some(result)))
 }
 
 fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, CommandError> {

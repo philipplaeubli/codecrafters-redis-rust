@@ -350,16 +350,30 @@ impl Store {
     pub fn xrange(
         &self,
         stream_key: &Bytes,
-        start_stream_id: StreamId,
-        end_stream_id: StreamId,
+        start_stream_id: Option<StreamId>,
+        end_stream_id: Option<StreamId>,
     ) -> Vec<(StreamId, HashMap<Bytes, Bytes>)> {
         let Some(stream) = self.streams.get(stream_key) else {
             return vec![];
         };
-        stream
-            .range(start_stream_id..=end_stream_id)
-            .map(|(id, entry)| (id.clone(), entry.clone()))
-            .collect()
+        if start_stream_id.is_some() && end_stream_id.is_some() {
+            stream
+                .range(start_stream_id.unwrap()..=end_stream_id.unwrap())
+                .map(|(id, entry)| (id.clone(), entry.clone()))
+                .collect()
+        } else {
+            if start_stream_id.is_none() {
+                stream
+                    .range(..=end_stream_id.unwrap())
+                    .map(|(id, entry)| (id.clone(), entry.clone()))
+                    .collect()
+            } else {
+                stream
+                    .range(start_stream_id.unwrap()..)
+                    .map(|(id, entry)| (id.clone(), entry.clone()))
+                    .collect()
+            }
+        }
     }
 }
 
