@@ -282,7 +282,7 @@ impl Store {
         } else {
             let opt_btree = self.streams.get(stream_key);
 
-            if !ms.is_none() && seq.is_none() {
+            if ms.is_some() && seq.is_none() {
                 println!("seq is set but ms is not");
                 let new_ms =
                     ms.unwrap_or(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis());

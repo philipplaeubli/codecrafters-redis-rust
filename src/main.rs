@@ -22,9 +22,9 @@ mod store;
 
 #[derive(Debug)]
 enum RedisError {
-    ParseError(RespParseError),
-    IoError(io::Error),
-    TokioError,
+    InvalidResp(RespParseError),
+    Networking(io::Error),
+    Concurrency,
 }
 
 #[derive(Debug)]
@@ -48,12 +48,12 @@ async fn handle_connection(
         let read_length = stream
             .read_buf(&mut buffer)
             .await
-            .map_err(RedisError::IoError)?;
+            .map_err(RedisError::Networking)?;
         if read_length == 0 {
             println!("Client closed connection");
             break;
         }
-        let result = parse_resp(&mut buffer).map_err(RedisError::ParseError)?;
+        let result = parse_resp(&mut buffer).map_err(RedisError::InvalidResp)?;
 
         let (reply_tx, reply_rx) = oneshot::channel();
         let message = RedisMessage::SendMessage {
@@ -63,9 +63,9 @@ async fn handle_connection(
         sender
             .send(message)
             .await
-            .map_err(|_| RedisError::TokioError)?;
+            .map_err(|_| RedisError::Concurrency)?;
 
-        let command_response = reply_rx.await.map_err(|_| RedisError::TokioError)?;
+        let command_response = reply_rx.await.map_err(|_| RedisError::Concurrency)?;
         let response = match command_response {
             CommandResponse::Immediate(redis_type) => redis_type,
             CommandResponse::Wait {
@@ -108,7 +108,10 @@ async fn handle_connection(
         };
 
         let res = response.to_bytes();
-        stream.write_all(&res).await.map_err(RedisError::IoError)?;
+        stream
+            .write_all(&res)
+            .await
+            .map_err(RedisError::Networking)?;
     }
     Ok(())
 }
@@ -171,15 +174,15 @@ async fn main() -> io::Result<()> {
 impl Display for RedisError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RedisError::ParseError(resp_parse_error) => match resp_parse_error {
+            RedisError::InvalidResp(resp_parse_error) => match resp_parse_error {
                 RespParseError::InvalidFormat => {
                     write!(f, "Invalid RESP format")
                 }
             },
-            RedisError::IoError(error) => {
+            RedisError::Networking(error) => {
                 write!(f, "IO error: {:?}", error)
             }
-            RedisError::TokioError => {
+            RedisError::Concurrency => {
                 write!(f, "Unknown async error")
             }
         }
