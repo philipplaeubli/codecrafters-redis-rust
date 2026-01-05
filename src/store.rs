@@ -1,3 +1,4 @@
+use std::ops::Bound::{Included, Unbounded};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     fmt::Display,
@@ -356,24 +357,13 @@ impl Store {
         let Some(stream) = self.streams.get(stream_key) else {
             return vec![];
         };
-        if start_stream_id.is_some() && end_stream_id.is_some() {
-            stream
-                .range(start_stream_id.unwrap()..=end_stream_id.unwrap())
-                .map(|(id, entry)| (id.clone(), entry.clone()))
-                .collect()
-        } else {
-            if start_stream_id.is_none() {
-                stream
-                    .range(..=end_stream_id.unwrap())
-                    .map(|(id, entry)| (id.clone(), entry.clone()))
-                    .collect()
-            } else {
-                stream
-                    .range(start_stream_id.unwrap()..)
-                    .map(|(id, entry)| (id.clone(), entry.clone()))
-                    .collect()
-            }
-        }
+
+        let start = start_stream_id.map(Included).unwrap_or(Unbounded);
+        let end = end_stream_id.map(Included).unwrap_or(Unbounded);
+        stream
+            .range((start, end))
+            .map(|(id, entry)| (*id, entry.clone()))
+            .collect()
     }
 }
 
