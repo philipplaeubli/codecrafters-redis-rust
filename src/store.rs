@@ -307,7 +307,7 @@ impl Store {
                     }
                 } else if new_ms == 0 {
                     // user input with lowest possible timestamp, we set seq to 1 (redis thing)
-                    StreamId { ms: new_ms, seq: 1 }
+                    min_stream_id
                 } else {
                     StreamId { ms: new_ms, seq: 0 } // new timestamp, we can start with sequence number 0
                 }
