@@ -333,32 +333,54 @@ fn handle_xrange(arguments: &[RedisType], store: &mut Store) -> Result<RedisType
 }
 
 fn handle_xread(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
-    let stream_key = argument_as_bytes(&arguments, 1)?;
-    let stream_id = extract_stream_id_values(&arguments[2]).map(|(ms, seq)| StreamId {
-        ms: ms.unwrap_or(0),
-        seq: seq.unwrap_or(0),
-    })?;
+    let xread_args = &arguments[1..];
 
-    let mut result: Vec<RedisType> = store
-        .xread(stream_key, stream_id)
+    let (stream_keys, stream_ids) = xread_args.split_at(xread_args.len() / 2);
+
+    let keys: Vec<&Bytes> = stream_keys
         .iter()
-        .map(|(id, map)| {
+        .map(redis_type_as_bytes) // -> Result<&Bytes, CommandError>
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let ids: Vec<StreamId> = stream_ids
+        .iter()
+        .map(extract_stream_id_values) // -> Result<&Bytes, CommandError>
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .map(|(ms, seq)| StreamId {
+            ms: ms.unwrap_or(0),
+            seq: seq.unwrap_or(0),
+        })
+        .collect();
+    let keys_and_ids: Vec<(&Bytes, StreamId)> = keys.into_iter().zip(ids.into_iter()).collect();
+    let result = keys_and_ids
+        .into_iter()
+        .map(|(key, stream)| {
+            // super double array encoding
             RedisType::Array(Some(vec![
-                id.into(),
+                RedisType::BulkString(key.clone()),
                 RedisType::Array(Some(
-                    map.iter()
-                        .flat_map(|(key, value)| [key.clone().into(), value.clone().into()])
+                    store
+                        .xread(key, stream)
+                        .iter()
+                        .map(|(id, map)| {
+                            RedisType::Array(Some(vec![
+                                id.into(),
+                                RedisType::Array(Some(
+                                    map.iter()
+                                        .flat_map(|(key, value)| {
+                                            [key.clone().into(), value.clone().into()]
+                                        })
+                                        .collect(),
+                                )),
+                            ]))
+                        })
                         .collect(),
                 )),
             ]))
         })
         .collect();
 
-    // super double array encoding
-    result = vec![RedisType::Array(Some(vec![
-        RedisType::BulkString(stream_key.clone()),
-        RedisType::Array(Some(result)),
-    ]))];
     Ok(RedisType::Array(Some(result)))
 }
 
@@ -374,6 +396,16 @@ fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, Co
     };
     Ok(bytes)
 }
+fn redis_type_as_bytes(redis_type: &RedisType) -> Result<&Bytes, CommandError> {
+    match redis_type {
+        RedisType::BulkString(b) => Ok(b),
+        RedisType::SimpleString(b) => Ok(b),
+        _ => Err(CommandError::InvalidInput(
+            "Invalid argument: Must be a bulkstring".into(),
+        )),
+    }
+}
+
 fn extract_key(arguments: &[RedisType]) -> Result<&Bytes, CommandError> {
     argument_as_bytes(arguments, 0)
 }
