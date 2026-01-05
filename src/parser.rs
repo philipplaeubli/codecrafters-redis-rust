@@ -94,14 +94,8 @@ impl From<Bytes> for RedisType {
     fn from(bytes: Bytes) -> Self {
         let some_type = bytes[0];
         match some_type {
-            b'$' => {
-                let x = parse_bulk_string(&mut BytesMut::from(bytes.as_ref()));
-                if x.is_err() {
-                    RedisType::NullBulkString
-                } else {
-                    x.unwrap()
-                }
-            }
+            b'$' => parse_bulk_string(&mut BytesMut::from(bytes.as_ref()))
+                .unwrap_or(Self::NullBulkString),
             _ => RedisType::NullBulkString,
         }
     }
@@ -177,23 +171,21 @@ fn parse_bulk_string(buffer: &mut BytesMut) -> Result<RedisType, RespParseError>
 
 fn parse_simple_content(buffer: &mut BytesMut) -> Result<Bytes, RespParseError> {
     // don't parse the whole buffer, but only until the crlf
-    let end = buffer.windows(2).position(|word| word == CRLF);
-    if let Some(end) = end {
-        // a simple string must not contain \r or \n
-        for &byte in &buffer[1..end] {
-            if byte == b'\r' || byte == b'\n' {
-                eprintln!("Invalid format: Simple string contains invalid characters");
-                return Err(RespParseError::InvalidFormat);
-            }
-        }
-        buffer.advance(1);
-        let content = buffer.split_to(end - 1).freeze();
-        buffer.advance(2); // Skip the CRLF
+    let end = buffer
+        .windows(2)
+        .position(|word| word == CRLF)
+        .ok_or(RespParseError::InvalidFormat)?;
 
-        Ok(content)
-    } else {
-        Err(RespParseError::InvalidFormat)
+    // a simple string must not contain \r or \n
+    let has_invalid = buffer[1..end].iter().any(|&b| b == b'\r' || b == b'\n');
+    if has_invalid {
+        return Err(RespParseError::InvalidFormat);
     }
+    buffer.advance(1);
+    let content = buffer.split_to(end - 1).freeze();
+    buffer.advance(2); // Skip the CRLF
+
+    Ok(content)
 }
 
 fn parse_simple_string(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {

@@ -256,35 +256,25 @@ fn extract_stream_id_values(
             {
                 let ms_slice = &bytes[0..pos];
                 let seq_slice = &bytes[pos + 1..];
-
+                let parse_err =
+                    || CommandError::InvalidInput("Unable to parse stream key".to_string());
                 let ms = if ms_slice == b"*" {
                     None
                 } else {
-                    let str_ms = str::from_utf8(ms_slice).map_err(|_err| {
-                        CommandError::InvalidInput(
-                            "Unable to parse first stream key id part".to_string(),
-                        )
-                    })?;
-                    let ms = str_ms.parse().map_err(|_| {
-                        CommandError::InvalidInput(
-                            "Unable to convert first stream key id part to integer".to_string(),
-                        )
-                    })?;
+                    let ms = str::from_utf8(ms_slice)
+                        .map_err(|_| parse_err())?
+                        .parse()
+                        .map_err(|_| parse_err())?;
                     Some(ms)
                 };
                 let seq = if seq_slice == b"*" {
                     None
                 } else {
-                    let str_seq = str::from_utf8(seq_slice).map_err(|_err| {
-                        CommandError::InvalidInput(
-                            "Unable to parse second stream key id part".to_string(),
-                        )
-                    })?;
-                    let seq = str_seq.parse().map_err(|_| {
-                        CommandError::InvalidInput(
-                            "Unable to convert second stream key id part to integer".to_string(),
-                        )
-                    })?;
+                    let seq = str::from_utf8(seq_slice)
+                        .map_err(|_| parse_err())?
+                        .parse::<u128>()
+                        .map_err(|_| parse_err())?;
+
                     Some(seq)
                 };
 
@@ -306,35 +296,38 @@ fn handle_xrange(arguments: &[RedisType], store: &mut Store) -> Result<RedisType
     let stream_key = extract_key(arguments)?;
     let (start_ms, start_sq) = extract_stream_id_values(&arguments[1])?;
     let (end_ms, end_sq) = extract_stream_id_values(&arguments[2])?;
-    let start_stream_id = if start_ms.is_some() {
-        Some(StreamId {
-            ms: start_ms.unwrap(),
-            seq: start_sq.unwrap_or(0),
+
+    let start_stream_id = start_ms
+        .map(|start_ms| {
+            Some(StreamId {
+                ms: start_ms,
+                seq: start_sq.unwrap_or(0),
+            })
         })
-    } else {
-        None
-    };
-    let end_stream_id = if end_ms.is_some() {
-        Some(StreamId {
-            ms: end_ms.unwrap(),
-            seq: end_sq.unwrap_or(0),
+        .unwrap_or(None);
+
+    let end_stream_id = end_ms
+        .map(|end_ms| {
+            Some(StreamId {
+                ms: end_ms,
+                seq: end_sq.unwrap_or(0),
+            })
         })
-    } else {
-        None
-    };
+        .unwrap_or(None);
 
     let results = store.xrange(stream_key, start_stream_id, end_stream_id);
 
     let result: Vec<RedisType> = results
         .iter()
-        .map(|entry| {
-            let mut entries = Vec::new();
-            for (key, value) in entry.1.iter() {
-                entries.push(key.clone().into());
-                entries.push(value.clone().into());
-            }
-
-            RedisType::Array(Some(vec![entry.0.into(), RedisType::Array(Some(entries))]))
+        .map(|(id, map)| {
+            RedisType::Array(Some(vec![
+                id.into(),
+                RedisType::Array(Some(
+                    map.iter()
+                        .flat_map(|(key, value)| [key.clone().into(), value.clone().into()])
+                        .collect(),
+                )),
+            ]))
         })
         .collect();
     Ok(RedisType::Array(Some(result)))
@@ -356,26 +349,24 @@ fn extract_key(arguments: &[RedisType]) -> Result<&Bytes, CommandError> {
     argument_as_bytes(arguments, 0)
 }
 fn argument_as_str(arguments: &[RedisType], index: usize) -> Result<&str, CommandError> {
-    let bytes = match arguments.get(index) {
-        Some(RedisType::BulkString(b)) => b,
+    match arguments.get(index) {
+        Some(RedisType::BulkString(b)) => str::from_utf8(b).map_err(|_| {
+            CommandError::InvalidInput("Invalid argument: Must be a valid UTF-8 string".into())
+        }),
         _ => {
             return Err(CommandError::InvalidInput(
                 "Invalid argument: Must be a bulkstring".into(),
             ));
         }
-    };
-
-    str::from_utf8(bytes).map_err(|_| {
-        CommandError::InvalidInput("Invalid argument: Must be a valid UTF-8 string".into())
-    })
+    }
 }
 
 fn argument_as_number<T>(arguments: &[RedisType], index: usize) -> Result<T, CommandError>
 where
     T: FromStr,
 {
-    let s = argument_as_str(arguments, index)?;
-    s.parse::<T>()
+    argument_as_str(arguments, index)?
+        .parse::<T>()
         .map_err(|_| CommandError::InvalidInput("Unable to parse argument to a number".into()))
 }
 

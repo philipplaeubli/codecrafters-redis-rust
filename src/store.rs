@@ -64,6 +64,12 @@ impl From<StreamId> for RedisType {
     }
 }
 
+impl From<&StreamId> for RedisType {
+    fn from(value: &StreamId) -> Self {
+        (*value).into()
+    }
+}
+
 impl Store {
     pub fn new() -> Self {
         Self::default()
