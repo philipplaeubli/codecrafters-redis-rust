@@ -267,63 +267,52 @@ impl Store {
     ) -> Result<StreamId, StoreError> {
         self.key_types.insert(stream_key.clone(), KeyType::Stream);
         let min_stream_id = StreamId { ms: 0, seq: 1 };
+        let last_stream_id = self
+            .streams
+            .get(stream_key) // get the btree
+            .and_then(|btree| btree.last_key_value().map(|(id, _)| id.clone()))
+            .unwrap_or(StreamId { ms: 0, seq: 0 });
 
-        let stream_id = if let Some(pot_ms) = ms
-            && let Some(pot_seq) = seq
-        {
-            println!(
-                "ms and seq set: Taking stream with ms: {}, seq: {}",
-                pot_ms, pot_seq
-            );
-            StreamId {
-                ms: pot_ms,
-                seq: pot_seq,
-            }
-        } else {
-            let opt_btree = self.streams.get(stream_key);
-
-            if ms.is_some() && seq.is_none() {
-                println!("ms is set but seq is not");
-                let new_ms =
-                    ms.unwrap_or(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis());
-                let mut new_seq = 1;
-                if let Some(existing_btree) = opt_btree {
-                    let last_id = existing_btree
-                        .last_key_value()
-                        .map(|(id, _)| id)
-                        .unwrap_or(&min_stream_id);
-
-                    if new_ms > 0 {
-                        new_seq = 0;
-                    }
-                    if last_id.ms == new_ms {
-                        new_seq = last_id.seq + 1;
-                    }
-                }
-
+        let stream_id = match (ms, seq) {
+            (Some(pot_ms), Some(pot_seq)) => {
+                println!(
+                    "ms and seq set: Taking stream with ms: {}, seq: {}",
+                    pot_ms, pot_seq
+                );
                 StreamId {
-                    ms: new_ms,
-                    seq: new_seq,
-                }
-            } else {
-                let new_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-
-                if let Some(existing_btree) = opt_btree {
-                    let last_id = existing_btree
-                        .last_key_value()
-                        .map(|(id, _)| id)
-                        .unwrap_or(&min_stream_id);
-                    StreamId {
-                        ms: last_id.ms,
-                        seq: last_id.seq + 1,
-                    }
-                } else {
-                    StreamId {
-                        ms: ms.unwrap_or(new_ms),
-                        seq: seq.unwrap_or(0),
-                    }
+                    ms: pot_ms,
+                    seq: pot_seq,
                 }
             }
+            (Some(pot_ms), None) => {
+                if pot_ms == last_stream_id.ms {
+                    StreamId {
+                        ms: pot_ms,
+                        seq: last_stream_id.seq + 1,
+                    }
+                } else if pot_ms == 0 {
+                    StreamId { ms: pot_ms, seq: 1 }
+                } else {
+                    StreamId { ms: pot_ms, seq: 0 }
+                }
+            }
+            (None, None) => {
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+                let new_ms = now.max(last_stream_id.ms);
+                if last_stream_id.ms == new_ms {
+                    // we already got an entry at that timestamp, increase sequence number
+                    StreamId {
+                        ms: last_stream_id.ms,
+                        seq: last_stream_id.seq + 1,
+                    }
+                } else if new_ms == 0 {
+                    // user input with lowest possible timestamp, we set seq to 1 (redis thing)
+                    StreamId { ms: new_ms, seq: 1 }
+                } else {
+                    StreamId { ms: new_ms, seq: 0 } // new timestamp, we can start with sequence number 0
+                }
+            }
+            _ => return Err(StoreError::StreamIdSmallerThanLast), // user passed something like *-* or *-1 which is not allowed
         };
 
         if stream_id < min_stream_id {
