@@ -1,4 +1,4 @@
-use std::ops::Bound::{Included, Unbounded};
+use std::ops::Bound::{Excluded, Included, Unbounded};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     fmt::Display,
@@ -368,6 +368,20 @@ impl Store {
         let end = end_stream_id.map(Included).unwrap_or(Unbounded);
         stream
             .range((start, end))
+            .map(|(id, entry)| (*id, entry.clone()))
+            .collect()
+    }
+
+    pub(crate) fn xread(
+        &self,
+        stream_key: &Bytes,
+        stream_id: StreamId,
+    ) -> Vec<(StreamId, HashMap<Bytes, Bytes>)> {
+        let Some(stream) = self.streams.get(stream_key) else {
+            return vec![];
+        };
+        stream
+            .range((Excluded(stream_id), Unbounded))
             .map(|(id, entry)| (*id, entry.clone()))
             .collect()
     }

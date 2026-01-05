@@ -315,9 +315,8 @@ fn handle_xrange(arguments: &[RedisType], store: &mut Store) -> Result<RedisType
         })
         .unwrap_or(None);
 
-    let results = store.xrange(stream_key, start_stream_id, end_stream_id);
-
-    let result: Vec<RedisType> = results
+    let result: Vec<RedisType> = store
+        .xrange(stream_key, start_stream_id, end_stream_id)
         .iter()
         .map(|(id, map)| {
             RedisType::Array(Some(vec![
@@ -330,6 +329,36 @@ fn handle_xrange(arguments: &[RedisType], store: &mut Store) -> Result<RedisType
             ]))
         })
         .collect();
+    Ok(RedisType::Array(Some(result)))
+}
+
+fn handle_xread(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
+    let stream_key = argument_as_bytes(&arguments, 1)?;
+    let stream_id = extract_stream_id_values(&arguments[2]).map(|(ms, seq)| StreamId {
+        ms: ms.unwrap_or(0),
+        seq: seq.unwrap_or(0),
+    })?;
+
+    let mut result: Vec<RedisType> = store
+        .xread(stream_key, stream_id)
+        .iter()
+        .map(|(id, map)| {
+            RedisType::Array(Some(vec![
+                id.into(),
+                RedisType::Array(Some(
+                    map.iter()
+                        .flat_map(|(key, value)| [key.clone().into(), value.clone().into()])
+                        .collect(),
+                )),
+            ]))
+        })
+        .collect();
+
+    // super double array encoding
+    result = vec![RedisType::Array(Some(vec![
+        RedisType::BulkString(stream_key.clone()),
+        RedisType::Array(Some(result)),
+    ]))];
     Ok(RedisType::Array(Some(result)))
 }
 
@@ -408,6 +437,7 @@ pub fn handle_command(
         "TYPE" => Ok(CommandResponse::Immediate(handle_type(arguments, store)?)),
         "XADD" => Ok(CommandResponse::Immediate(handle_xadd(arguments, store)?)),
         "XRANGE" => Ok(CommandResponse::Immediate(handle_xrange(arguments, store)?)),
+        "XREAD" => Ok(CommandResponse::Immediate(handle_xread(arguments, store)?)),
         "BLPOP" => handle_blpop(arguments, store),
 
         _ => Err(CommandError::UnknownCommand(format!(
