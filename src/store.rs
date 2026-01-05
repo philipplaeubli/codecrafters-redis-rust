@@ -360,14 +360,12 @@ impl Store {
         start_stream_id: Option<StreamId>,
         end_stream_id: Option<StreamId>,
     ) -> Vec<(StreamId, HashMap<Bytes, Bytes>)> {
-        let Some(stream) = self.streams.get(stream_key) else {
-            return vec![];
-        };
-
         let start = start_stream_id.map(Included).unwrap_or(Unbounded);
         let end = end_stream_id.map(Included).unwrap_or(Unbounded);
-        stream
-            .range((start, end))
+        self.streams
+            .get(stream_key)
+            .iter()
+            .flat_map(|f| f.range((start, end)))
             .map(|(id, entry)| (*id, entry.clone()))
             .collect()
     }
@@ -377,11 +375,10 @@ impl Store {
         stream_key: &Bytes,
         stream_id: StreamId,
     ) -> Vec<(StreamId, HashMap<Bytes, Bytes>)> {
-        let Some(stream) = self.streams.get(stream_key) else {
-            return vec![];
-        };
-        stream
-            .range((Excluded(stream_id), Unbounded))
+        self.streams
+            .get(stream_key)
+            .into_iter()
+            .flat_map(|stream| stream.range((Excluded(stream_id), Unbounded)))
             .map(|(id, entry)| (*id, entry.clone()))
             .collect()
     }
