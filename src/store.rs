@@ -159,10 +159,9 @@ impl Store {
 
         let expires = expiry
             .map(|ex| {
-                let now = SystemTime::now()
+                SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .and_then(|dur| Ok(dur.as_millis() + ex));
-                now
+                    .and_then(|dur| Ok(dur.as_millis() + ex))
             })
             .transpose()?;
 
