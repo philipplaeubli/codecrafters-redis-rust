@@ -266,7 +266,7 @@ impl Store {
         args: &[RedisType],
     ) -> Result<StreamId, StoreError> {
         self.key_types.insert(stream_key.clone(), KeyType::Stream);
-        let zero_stream_id = StreamId { ms: 0, seq: 1 };
+        let min_stream_id = StreamId { ms: 0, seq: 1 };
 
         let stream_id = if let Some(pot_ms) = ms
             && let Some(pot_seq) = seq
@@ -283,7 +283,7 @@ impl Store {
             let opt_btree = self.streams.get(stream_key);
 
             if ms.is_some() && seq.is_none() {
-                println!("seq is set but ms is not");
+                println!("ms is set but seq is not");
                 let new_ms =
                     ms.unwrap_or(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis());
                 let mut new_seq = 1;
@@ -291,7 +291,7 @@ impl Store {
                     let last_id = existing_btree
                         .last_key_value()
                         .map(|(id, _)| id)
-                        .unwrap_or(&zero_stream_id);
+                        .unwrap_or(&min_stream_id);
 
                     if new_ms > 0 {
                         new_seq = 0;
@@ -312,7 +312,7 @@ impl Store {
                     let last_id = existing_btree
                         .last_key_value()
                         .map(|(id, _)| id)
-                        .unwrap_or(&zero_stream_id);
+                        .unwrap_or(&min_stream_id);
                     StreamId {
                         ms: last_id.ms,
                         seq: last_id.seq + 1,
@@ -326,7 +326,7 @@ impl Store {
             }
         };
 
-        if stream_id < zero_stream_id {
+        if stream_id < min_stream_id {
             return Err(StoreError::StreamIdNotGreaterThan0);
         }
 
@@ -347,8 +347,8 @@ impl Store {
                 insert_keys_and_values(args, btree.entry(stream_id).or_default());
             }
             std::collections::hash_map::Entry::Vacant(vacant_entry) => {
-                let mut btree: BTreeMap<StreamId, HashMap<Bytes, Bytes>> = BTreeMap::new();
-                let mut map: HashMap<Bytes, Bytes> = HashMap::new();
+                let mut btree = BTreeMap::new();
+                let mut map = HashMap::new();
                 insert_keys_and_values(args, &mut map);
                 btree.insert(stream_id, map);
                 vacant_entry.insert(btree);
