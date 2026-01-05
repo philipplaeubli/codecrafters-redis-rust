@@ -261,12 +261,70 @@ impl Store {
     pub fn xadd(
         &mut self,
         stream_key: &Bytes,
-        stream_id: StreamId,
+        seq: Option<u64>,
+        ms: Option<u64>,
         args: &[RedisType],
     ) -> Result<StreamId, StoreError> {
         self.key_types.insert(stream_key.clone(), KeyType::Stream);
-        let zero_stream_id = StreamId { ms: 0, seq: 0 };
-        if stream_id <= zero_stream_id {
+        let zero_stream_id = StreamId { ms: 0, seq: 1 };
+
+        let stream_id = if let Some(pot_ms) = ms
+            && let Some(pot_seq) = seq
+        {
+            println!(
+                "ms and seq set: Taking stream with ms: {}, seq: {}",
+                pot_ms, pot_seq
+            );
+            StreamId {
+                ms: pot_ms,
+                seq: pot_seq,
+            }
+        } else {
+            let opt_btree = self.streams.get(stream_key);
+
+            if !ms.is_none()
+                && seq.is_none()
+                && let Some(existing_btree) = opt_btree
+            {
+                println!("seq is set but ms is not");
+                let new_ms = ms.unwrap_or(0);
+                let last_id = existing_btree
+                    .last_key_value()
+                    .map(|(id, _)| id)
+                    .unwrap_or(&zero_stream_id);
+
+                let mut new_seq = 1;
+                if new_ms > 0 {
+                    new_seq = 0;
+                }
+                if last_id.ms == new_ms {
+                    new_seq = last_id.seq + 1;
+                }
+
+                StreamId {
+                    ms: new_ms,
+                    seq: new_seq,
+                }
+            } else {
+                if let Some(existing_btree) = opt_btree {
+                    let last_id = existing_btree
+                        .last_key_value()
+                        .map(|(id, _)| id)
+                        .unwrap_or(&zero_stream_id);
+                    StreamId {
+                        ms: last_id.ms,
+                        seq: last_id.seq + 1,
+                    }
+                } else {
+                    StreamId {
+                        ms: ms.unwrap_or(0),
+                        seq: seq.unwrap_or(1),
+                    }
+                }
+            }
+        };
+
+        if stream_id < zero_stream_id {
             return Err(StoreError::StreamIdNotGreaterThan0);
         }
 

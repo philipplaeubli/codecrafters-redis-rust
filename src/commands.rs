@@ -5,7 +5,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     parser::RedisType,
-    store::{Store, StoreError, StreamId},
+    store::{Store, StoreError},
 };
 
 #[derive(Debug)]
@@ -224,36 +224,52 @@ fn handle_type(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, 
 fn handle_xadd(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
-    let stream_id = match &arguments[1] {
+    let (ms, seq) = match &arguments[1] {
         RedisType::BulkString(bytes) => {
-            let pos = bytes.windows(1).position(|something| something == [b'-']);
+            // find the separator of the stream id
+            let pos = bytes.windows(1).position(|char| char == [b'-']);
 
-            if let Some(pos) = pos {
-                let str_ms = str::from_utf8(&bytes[0..pos]).map_err(|_err| {
-                    CommandError::InvalidInput(
-                        "Unable to parse first stream key id part".to_string(),
-                    )
-                })?;
-                let ms = str_ms.parse().map_err(|_| {
-                    CommandError::InvalidInput(
-                        "Unable to convert first stream key id part to integer".to_string(),
-                    )
-                })?;
+            if let Some(pos) = pos
+                && pos > 0
+                && pos < bytes.len()
+            {
+                let ms_slice = &bytes[0..pos];
+                let seq_slice = &bytes[pos + 1..];
 
-                let str_seq = str::from_utf8(&bytes[pos + 1..]).map_err(|_err| {
-                    CommandError::InvalidInput(
-                        "Unable to parse second stream key id part".to_string(),
-                    )
-                })?;
-                let seq = str_seq.parse().map_err(|_| {
-                    CommandError::InvalidInput(
-                        "Unable to convert second stream key id part to integer".to_string(),
-                    )
-                })?;
+                let ms = if ms_slice == b"*" {
+                    None
+                } else {
+                    let str_ms = str::from_utf8(ms_slice).map_err(|_err| {
+                        CommandError::InvalidInput(
+                            "Unable to parse first stream key id part".to_string(),
+                        )
+                    })?;
+                    let ms = str_ms.parse().map_err(|_| {
+                        CommandError::InvalidInput(
+                            "Unable to convert first stream key id part to integer".to_string(),
+                        )
+                    })?;
+                    Some(ms)
+                };
+                let seq = if seq_slice == b"*" {
+                    None
+                } else {
+                    let str_seq = str::from_utf8(seq_slice).map_err(|_err| {
+                        CommandError::InvalidInput(
+                            "Unable to parse second stream key id part".to_string(),
+                        )
+                    })?;
+                    let seq = str_seq.parse().map_err(|_| {
+                        CommandError::InvalidInput(
+                            "Unable to convert second stream key id part to integer".to_string(),
+                        )
+                    })?;
+                    Some(seq)
+                };
 
-                StreamId { ms, seq }
+                (ms, seq)
             } else {
-                StreamId { ms: 0, seq: 0 }
+                (None, None)
             }
         }
         _ => {
@@ -262,7 +278,8 @@ fn handle_xadd(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, 
             ));
         }
     };
-    match store.xadd(key, stream_id, &arguments[2..]) {
+
+    match store.xadd(key, seq, ms, &arguments[2..]) {
         Ok(id) => Ok(id.into()),
         Err(StoreError::StreamIdSmallerThanLast) => Ok(RedisType::SimpleError(
             "ERR The ID specified in XADD is equal or smaller than the target stream top item"
