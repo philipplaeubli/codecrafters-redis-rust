@@ -90,6 +90,23 @@ impl From<std::io::Error> for RespParseError {
     }
 }
 
+impl From<Bytes> for RedisType {
+    fn from(bytes: Bytes) -> Self {
+        let some_type = bytes[0];
+        match some_type {
+            b'$' => {
+                let x = parse_bulk_string(&mut BytesMut::from(bytes.as_ref()));
+                if x.is_err() {
+                    RedisType::NullBulkString
+                } else {
+                    x.unwrap()
+                }
+            }
+            _ => RedisType::NullBulkString,
+        }
+    }
+}
+
 fn parse_array(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
     // let array_with_size_prefix = &buffer[1..];
     let array_len_delimiter_pos = buffer

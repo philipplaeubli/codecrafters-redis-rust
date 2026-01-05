@@ -5,7 +5,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     parser::RedisType,
-    store::{Store, StoreError},
+    store::{Store, StoreError, StreamId},
 };
 
 #[derive(Debug)]
@@ -224,7 +224,28 @@ fn handle_type(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, 
 fn handle_xadd(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
 
-    let (ms, seq) = match &arguments[1] {
+    let (ms, seq) = extract_stream_id_values(&arguments[1])?;
+
+    match store.xadd(key, seq, ms, &arguments[2..]) {
+        Ok(id) => Ok(id.into()),
+        Err(StoreError::StreamIdSmallerThanLast) => Ok(RedisType::SimpleError(
+            "ERR The ID specified in XADD is equal or smaller than the target stream top item"
+                .into(),
+        )),
+        Err(StoreError::StreamIdNotGreaterThan0) => Ok(RedisType::SimpleError(
+            "ERR The ID specified in XADD must be greater than 0-0".into(),
+        )),
+        Err(other) => Err(CommandError::InvalidInput(format!(
+            "Unable to add to stream: {:?}",
+            other
+        ))),
+    }
+}
+
+fn extract_stream_id_values(
+    argument: &RedisType,
+) -> Result<(Option<u128>, Option<u128>), CommandError> {
+    let (ms, seq) = match argument {
         RedisType::BulkString(bytes) => {
             // find the separator of the stream id
             let pos = bytes.windows(1).position(|char| char == [b'-']);
@@ -278,21 +299,49 @@ fn handle_xadd(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, 
             ));
         }
     };
+    Ok((ms, seq))
+}
 
-    match store.xadd(key, seq, ms, &arguments[2..]) {
-        Ok(id) => Ok(id.into()),
-        Err(StoreError::StreamIdSmallerThanLast) => Ok(RedisType::SimpleError(
-            "ERR The ID specified in XADD is equal or smaller than the target stream top item"
-                .into(),
-        )),
-        Err(StoreError::StreamIdNotGreaterThan0) => Ok(RedisType::SimpleError(
-            "ERR The ID specified in XADD must be greater than 0-0".into(),
-        )),
-        Err(other) => Err(CommandError::InvalidInput(format!(
-            "Unable to add to stream: {:?}",
-            other
-        ))),
-    }
+fn handle_xrange(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
+    let stream_key = extract_key(arguments)?;
+    let (start_ms, start_sq) = extract_stream_id_values(&arguments[1])?;
+    let (end_ms, end_sq) = extract_stream_id_values(&arguments[2])?;
+    let start_stream_id = if start_ms.is_some() {
+        StreamId {
+            ms: start_ms.unwrap(),
+            seq: start_sq.unwrap_or(0),
+        }
+    } else {
+        return Err(CommandError::InvalidInput(
+            "Invalid start stream id".to_string(),
+        ));
+    };
+    let end_stream_id = if end_ms.is_some() {
+        StreamId {
+            ms: end_ms.unwrap(),
+            seq: end_sq.unwrap_or(0),
+        }
+    } else {
+        return Err(CommandError::InvalidInput(
+            "Invalid start stream id".to_string(),
+        ));
+    };
+    println!("Start stream id: {:?}", start_stream_id);
+    println!("End stream id: {:?}", end_stream_id);
+    let results = store.xrange(stream_key, start_stream_id, end_stream_id);
+    let x: Vec<RedisType> = results
+        .iter()
+        .map(|entry| {
+            let mut entries = Vec::new();
+            for (key, value) in entry.1.iter() {
+                entries.push(key.clone().into());
+                entries.push(value.clone().into());
+            }
+
+            RedisType::Array(Some(vec![entry.0.into(), RedisType::Array(Some(entries))]))
+        })
+        .collect();
+    Ok(RedisType::Array(Some(x)))
 }
 
 fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, CommandError> {
@@ -371,6 +420,7 @@ pub fn handle_command(
         "LPOP" => Ok(CommandResponse::Immediate(handle_lpop(arguments, store)?)),
         "TYPE" => Ok(CommandResponse::Immediate(handle_type(arguments, store)?)),
         "XADD" => Ok(CommandResponse::Immediate(handle_xadd(arguments, store)?)),
+        "XRANGE" => Ok(CommandResponse::Immediate(handle_xrange(arguments, store)?)),
         "BLPOP" => handle_blpop(arguments, store),
 
         _ => Err(CommandError::UnknownCommand(format!(

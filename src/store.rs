@@ -346,6 +346,21 @@ impl Store {
 
         Ok(stream_id)
     }
+
+    pub fn xrange(
+        &self,
+        stream_key: &Bytes,
+        start_stream_id: StreamId,
+        end_stream_id: StreamId,
+    ) -> Vec<(StreamId, HashMap<Bytes, Bytes>)> {
+        let Some(stream) = self.streams.get(stream_key) else {
+            return vec![];
+        };
+        stream
+            .range(start_stream_id..=end_stream_id)
+            .map(|(id, entry)| (id.clone(), entry.clone()))
+            .collect()
+    }
 }
 
 fn insert_keys_and_values(arguments: &[RedisType], map: &mut HashMap<Bytes, Bytes>) {
