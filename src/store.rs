@@ -163,7 +163,7 @@ impl Store {
                     .duration_since(UNIX_EPOCH)
                     .and_then(|dur| Ok(dur.as_millis() + ex))
             })
-            .transpose()?;
+            .transpose()?; // converts a Result<Option<Duration>, Error> to Option<u128>!!
 
         let key_value = WithExpiry { value, expires };
         self.keys.insert(key, key_value);
