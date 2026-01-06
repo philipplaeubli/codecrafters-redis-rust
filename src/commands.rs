@@ -217,8 +217,13 @@ fn handle_blpop(
 
 fn handle_type(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
     let key = extract_key(arguments)?;
-    let key_type = store.get_type(key).map_err(CommandError::StoreError)?;
-    Ok(RedisType::SimpleString(key_type))
+    match store.get_type(key) {
+        Ok(resp) => Ok(RedisType::SimpleString(resp)),
+        Err(error) => match error {
+            StoreError::KeyNotFound => Ok(RedisType::SimpleString("none".into())),
+            _ => Err(CommandError::StoreError(error)),
+        },
+    }
 }
 
 fn handle_xadd(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
