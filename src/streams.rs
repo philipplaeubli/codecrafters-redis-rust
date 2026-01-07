@@ -94,7 +94,7 @@ fn handle_xread_immediate(
             seq: seq.unwrap_or(0),
         })
         .collect();
-    let keys_and_ids: Vec<(&Bytes, StreamId)> = keys.into_iter().zip(ids.into_iter()).collect();
+    let keys_and_ids: Vec<(&Bytes, StreamId)> = keys.into_iter().zip(ids).collect();
     let result = keys_and_ids
         .into_iter()
         .map(|(key, stream)| {

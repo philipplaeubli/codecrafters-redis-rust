@@ -169,7 +169,7 @@ impl Store {
             .map(|ex| {
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .and_then(|dur| Ok(dur.as_millis() + ex))
+                    .map(|dur| dur.as_millis() + ex)
             })
             .transpose()?; // converts a Result<Option<Duration>, Error> to Option<u128>!!
 
