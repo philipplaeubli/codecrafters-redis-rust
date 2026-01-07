@@ -19,10 +19,10 @@ use crate::{
 mod command_utils;
 mod commands;
 mod keys;
+mod lists;
 mod parser;
 mod store;
 mod streams;
-
 #[derive(Debug)]
 enum RedisError {
     InvalidResp(RespParseError),
