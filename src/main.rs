@@ -21,7 +21,7 @@ mod commands;
 mod keys;
 mod parser;
 mod store;
-mod xread_utils;
+mod streams;
 
 #[derive(Debug)]
 enum RedisError {

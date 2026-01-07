@@ -10,7 +10,7 @@ use bytes::Bytes;
 use tokio::sync::oneshot;
 
 use crate::parser::RedisType;
-use crate::xread_utils::xread_output_to_redis_type;
+use crate::streams::xread_output_to_redis_type;
 
 pub struct WithExpiry {
     value: Bytes,
@@ -325,7 +325,7 @@ impl Store {
         let last_stream_id = self
             .streams
             .get(stream_key) // get the btree
-            .and_then(|btree| btree.last_key_value().map(|(id, _)| id.clone()))
+            .and_then(|btree| btree.last_key_value().map(|(id, _)| *id))
             .unwrap_or(StreamId { ms: 0, seq: 0 });
 
         let stream_id = match (ms, seq) {
@@ -441,7 +441,7 @@ impl Store {
 
 fn insert_keys_and_values(arguments: &[RedisType], map: &mut HashMap<Bytes, Bytes>) {
     for chunk in arguments[0..].chunks_exact(2) {
-        map.insert((&chunk[0]).to_bytes(), (&chunk[1]).to_bytes());
+        map.insert(chunk[0].to_bytes(), chunk[1].to_bytes());
     }
 }
 
