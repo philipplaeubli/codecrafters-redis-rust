@@ -81,13 +81,12 @@ async fn handle_connection(
                 if let Some(_transactions) = transactions {
                     todo!()
                 } else {
-                    RedisType::SimpleString(Bytes::from("ERR EXEC without MULTI"))
+                    RedisType::SimpleError(Bytes::from("ERR EXEC without MULTI"))
                 }
             }
             CommandResponse::StartTransaction => {
-                println!("Received start transaction command");
                 transactions = Some(VecDeque::new());
-                RedisType::SimpleError(Bytes::from("OK"))
+                RedisType::SimpleString(Bytes::from("OK"))
             }
             CommandResponse::WaitForBLPOP {
                 timeout: timeout_sec,
