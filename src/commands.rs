@@ -4,6 +4,8 @@ use bytes::Bytes;
 use tokio::sync::oneshot;
 
 use crate::{
+    command_utils::{argument_as_number, argument_as_str, extract_key, redis_type_as_bytes},
+    keys::{handle_get, handle_set},
     parser::RedisType,
     store::{Store, StoreError, StreamId},
     xread_utils::xread_output_to_redis_type,
@@ -30,67 +32,6 @@ fn handle_echo(arguments: &[RedisType]) -> Result<RedisType, CommandError> {
         Some(RedisType::BulkString(value)) => Ok(RedisType::BulkString(value.clone())),
         _ => Ok(RedisType::SimpleString(Bytes::from_static(b""))),
     }
-}
-
-fn handle_get(arguments: &[RedisType], store: &Store) -> Result<RedisType, CommandError> {
-    let key = extract_key(arguments)?;
-
-    let value = store.get(key.clone());
-    match value {
-        Ok(value) => Ok(RedisType::BulkString(value.clone())),
-        Err(StoreError::KeyExpired) => Ok(RedisType::NullBulkString), // we handle key expiration and return a null bulk string
-
-        Err(StoreError::KeyNotFound) => Ok(RedisType::NullBulkString),
-        Err(StoreError::TimeError) => Err(CommandError::InvalidInput(
-            "Unable to convert expiry to unix timestamp".into(),
-        )),
-
-        Err(StoreError::StreamIdSmallerThanLast) => Err(CommandError::InvalidInput(
-            "Stream ID is smaller than the last ID".into(),
-        )),
-        Err(StoreError::StreamIdNotGreaterThan0) => Err(CommandError::InvalidInput(
-            "Stream ID must be greater than 0-0".into(),
-        )),
-    }
-}
-
-fn handle_set(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
-    if arguments.len() != 2 && arguments.len() != 4 {
-        // either it's a simple SET, or it's a SET with an expiry
-        return Err(CommandError::InvalidInput(
-            "Invalid input: expected 2 or 4 arguments".into(),
-        ));
-    }
-
-    let key = extract_key(arguments)?;
-    let value = argument_as_bytes(arguments, 1)?;
-
-    let mut expiry: Option<u128> = None;
-    if arguments.len() == 4 {
-        let expiry_unit = argument_as_str(arguments, 2)?;
-        let expiry_value: u128 = argument_as_number(arguments, 3)?;
-
-        let unit_factor = match expiry_unit {
-            "EX" => 1000,
-            "PX" => 1,
-            _ => {
-                return Err(CommandError::InvalidInput(
-                    "Invalid input: expiry unit of SET must be either 'EX' or 'PX'".into(),
-                ));
-            }
-        };
-        expiry = Some(expiry_value * unit_factor);
-    }
-
-    store
-        .set_with_expiry(key.clone(), value.clone(), expiry)
-        .map_err(|store_error| match store_error {
-            StoreError::TimeError => {
-                CommandError::InvalidInput("Unable to convert expiry to unix timestamp".into())
-            }
-            _ => CommandError::StoreError(store_error),
-        })?;
-    Ok(RedisType::SimpleString(Bytes::from_static(b"OK")))
 }
 
 fn handle_rpush(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
@@ -439,53 +380,6 @@ fn handle_xread(
         let resp = handle_xread_immediate(keys_and_ids, store)?;
         Ok(CommandResponse::Immediate(resp))
     }
-}
-
-fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, CommandError> {
-    let bytes = match arguments.get(index) {
-        Some(RedisType::BulkString(b)) => b,
-        Some(RedisType::SimpleString(b)) => b,
-        _ => {
-            return Err(CommandError::InvalidInput(
-                "Invalid argument: Must be a bulkstring".into(),
-            ));
-        }
-    };
-    Ok(bytes)
-}
-fn redis_type_as_bytes(redis_type: &RedisType) -> Result<&Bytes, CommandError> {
-    match redis_type {
-        RedisType::BulkString(b) => Ok(b),
-        RedisType::SimpleString(b) => Ok(b),
-        _ => Err(CommandError::InvalidInput(
-            "Invalid argument: Must be a bulkstring".into(),
-        )),
-    }
-}
-
-fn extract_key(arguments: &[RedisType]) -> Result<&Bytes, CommandError> {
-    argument_as_bytes(arguments, 0)
-}
-fn argument_as_str(arguments: &[RedisType], index: usize) -> Result<&str, CommandError> {
-    match arguments.get(index) {
-        Some(RedisType::BulkString(b)) => str::from_utf8(b).map_err(|_| {
-            CommandError::InvalidInput("Invalid argument: Must be a valid UTF-8 string".into())
-        }),
-        _ => {
-            return Err(CommandError::InvalidInput(
-                "Invalid argument: Must be a bulkstring".into(),
-            ));
-        }
-    }
-}
-
-fn argument_as_number<T>(arguments: &[RedisType], index: usize) -> Result<T, CommandError>
-where
-    T: FromStr,
-{
-    argument_as_str(arguments, index)?
-        .parse::<T>()
-        .map_err(|_| CommandError::InvalidInput("Unable to parse argument to a number".into()))
 }
 
 #[derive(Debug)]

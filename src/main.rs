@@ -16,7 +16,9 @@ use crate::{
     parser::{RedisType, RespParseError, parse_resp},
     store::Store,
 };
+mod command_utils;
 mod commands;
+mod keys;
 mod parser;
 mod store;
 mod xread_utils;
@@ -109,7 +111,7 @@ async fn handle_connection(
             CommandResponse::WaitForXREAD {
                 timeout: timeout_millis,
                 receiver,
-                keys_only,
+                keys_only: _,
                 client_id,
             } => {
                 println!("Received wait command for client: {}", client_id);
