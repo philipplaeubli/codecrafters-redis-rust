@@ -109,8 +109,15 @@ fn parse_array(buffer: &mut BytesMut) -> Result<RedisType, RespParseError> {
         .ok_or(RespParseError::InvalidFormat)?;
 
     let size_as_string = &buffer[1..array_len_delimiter_pos];
-    let array_length = str::from_utf8(size_as_string)?.parse::<usize>()?;
     let array_start_position = array_len_delimiter_pos + 2;
+
+    // Handle null array: *-1\r\n
+    let array_length_signed = str::from_utf8(size_as_string)?.parse::<i64>()?;
+    if array_length_signed < 0 {
+        buffer.advance(array_start_position);
+        return Ok(RedisType::Array(None));
+    }
+    let array_length = array_length_signed as usize;
 
     buffer.advance(array_start_position);
 
