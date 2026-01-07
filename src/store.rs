@@ -10,6 +10,7 @@ use bytes::Bytes;
 use tokio::sync::oneshot;
 
 use crate::parser::RedisType;
+use crate::xread_utils::xread_output_to_redis_type;
 
 pub struct WithExpiry {
     value: Bytes,
@@ -42,7 +43,8 @@ pub struct Store {
     streams: HashMap<Bytes, BTreeMap<StreamId, HashMap<Bytes, Bytes>>>,
     keys: HashMap<Bytes, WithExpiry>,
     lists: HashMap<Bytes, Vec<Bytes>>,
-    blpop_waiting_queue: HashMap<Bytes, VecDeque<WaitingClient>>,
+    blpop_waiting_queue: HashMap<Bytes, VecDeque<WaitingLPOPClient>>,
+    xread_waiting_queue: Vec<WaitingXREADClient>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct StreamId {
@@ -50,9 +52,15 @@ pub struct StreamId {
     pub seq: u128,
 }
 
-/// Represents a client waiting for data
-pub struct WaitingClient {
+/// Represents a lpop client waiting for data
+pub struct WaitingLPOPClient {
     pub identifier: u64,
+    pub sender: oneshot::Sender<RedisType>,
+}
+/// Represents a lpop client waiting for data
+pub struct WaitingXREADClient {
+    pub identifier: u64,
+    pub keys: Vec<Bytes>,
     pub sender: oneshot::Sender<RedisType>,
 }
 
@@ -207,13 +215,13 @@ impl Store {
         Some(removed)
     }
 
-    pub fn register_waiting_client(
+    pub fn register_blpop_waiting_client(
         &mut self,
         key: Bytes,
         sender: oneshot::Sender<RedisType>,
     ) -> u64 {
         let identifier = NEXT_CLIENT_ID.fetch_add(1, Ordering::SeqCst);
-        let client = WaitingClient { identifier, sender };
+        let client = WaitingLPOPClient { identifier, sender };
 
         self.blpop_waiting_queue
             .entry(key)
@@ -223,13 +231,48 @@ impl Store {
         identifier
     }
 
-    pub fn remove_waiting_client(&mut self, key: &Bytes, client_id: u64) {
+    pub fn register_xread_waiting_client(
+        &mut self,
+        keys: Vec<Bytes>,
+        sender: oneshot::Sender<RedisType>,
+    ) -> u64 {
+        let identifier = NEXT_CLIENT_ID.fetch_add(1, Ordering::SeqCst);
+        let client = WaitingXREADClient {
+            identifier,
+            keys,
+            sender,
+        };
+        self.xread_waiting_queue.push(client);
+        identifier
+    }
+
+    pub fn remove_blpop_waiting_client(&mut self, key: &Bytes, client_id: u64) {
         if let Some(queue) = self.blpop_waiting_queue.get_mut(key) {
             queue.retain(|client| client.identifier != client_id);
 
             // Clean up empty queues
             if queue.is_empty() {
                 self.blpop_waiting_queue.remove(key);
+            }
+        }
+    }
+
+    fn notify_xread_waiting_clients(&mut self, key: &Bytes, stream_id: StreamId) {
+        let mut i = 0;
+        while i < self.xread_waiting_queue.len() {
+            let should_notify = self.xread_waiting_queue[i].keys.contains(key);
+
+            if should_notify {
+                let client = self.xread_waiting_queue.swap_remove(i); // now we own it
+                let res = self.xread(key, stream_id, true);
+                let res2 = xread_output_to_redis_type(key.clone(), res);
+                println!("result for {:?} would have been {:?}", key, res2);
+                if client.sender.send(res2).is_ok() {
+                    println!("Client {} notified", client.identifier);
+                }
+                // don't increment i (swap_remove brings a new element into i)
+            } else {
+                i += 1;
             }
         }
     }
@@ -351,6 +394,7 @@ impl Store {
                 vacant_entry.insert(btree);
             }
         }
+        self.notify_xread_waiting_clients(stream_key, stream_id);
 
         Ok(stream_id)
     }
@@ -375,11 +419,17 @@ impl Store {
         &self,
         stream_key: &Bytes,
         stream_id: StreamId,
+        include_stream_id: bool,
     ) -> Vec<(StreamId, HashMap<Bytes, Bytes>)> {
+        let start = if include_stream_id {
+            Included(stream_id)
+        } else {
+            Excluded(stream_id)
+        };
         self.streams
             .get(stream_key)
             .into_iter()
-            .flat_map(|stream| stream.range((Excluded(stream_id), Unbounded)))
+            .flat_map(|stream| stream.range((start, Unbounded)))
             .map(|(id, entry)| (*id, entry.clone()))
             .collect()
     }

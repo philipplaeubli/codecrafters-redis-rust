@@ -1,6 +1,6 @@
 use bytes::{Buf, Bytes, BytesMut};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RedisType {
     SimpleString(Bytes),
     BulkString(Bytes),

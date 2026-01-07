@@ -202,12 +202,12 @@ fn handle_blpop(
 
     // No data - register for waiting
     let (tx, rx) = oneshot::channel();
-    let identifier = store.register_waiting_client(key.clone(), tx);
+    let identifier = store.register_blpop_waiting_client(key.clone(), tx);
     println!(
         "Waiting with timeout {} for client: {}",
         timeout, identifier
     );
-    Ok(CommandResponse::Wait {
+    Ok(CommandResponse::WaitForBLPOP {
         timeout,
         receiver: rx,
         key: key.clone(),
@@ -337,10 +337,11 @@ fn handle_xrange(arguments: &[RedisType], store: &mut Store) -> Result<RedisType
     Ok(RedisType::Array(Some(result)))
 }
 
-fn handle_xread(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
-    let xread_args = &arguments[1..];
-
-    let (stream_keys, stream_ids) = xread_args.split_at(xread_args.len() / 2);
+fn handle_xread_immediate(
+    keys_and_ids: &[RedisType],
+    store: &mut Store,
+) -> Result<RedisType, CommandError> {
+    let (stream_keys, stream_ids) = keys_and_ids.split_at(keys_and_ids.len() / 2);
 
     let keys: Vec<&Bytes> = stream_keys
         .iter()
@@ -366,7 +367,7 @@ fn handle_xread(arguments: &[RedisType], store: &mut Store) -> Result<RedisType,
                 RedisType::BulkString(key.clone()),
                 RedisType::Array(Some(
                     store
-                        .xread(key, stream)
+                        .xread(key, stream, false)
                         .iter()
                         .map(|(id, map)| {
                             RedisType::Array(Some(vec![
@@ -387,6 +388,77 @@ fn handle_xread(arguments: &[RedisType], store: &mut Store) -> Result<RedisType,
         .collect();
 
     Ok(RedisType::Array(Some(result)))
+}
+
+fn handle_xread(
+    arguments: &[RedisType],
+    store: &mut Store,
+) -> Result<CommandResponse, CommandError> {
+    let possible_block = argument_as_str(arguments, 0)?;
+
+    if possible_block.to_uppercase() == "BLOCK" {
+        let timeout: u128 = argument_as_number(arguments, 1)?;
+
+        let keys_and_ids = &arguments[3..];
+
+        let resp = handle_xread_immediate(keys_and_ids, store)?;
+        if let RedisType::Array(Some(array)) = &resp
+            && array.len() > 0
+        {
+            // data structure is [[id, [field, value]]] -> [field, value] is empty -> no data
+            let has_some_content = array
+                .get(0)
+                .and_then(|first_inner| {
+                    if let RedisType::Array(Some(some_inner)) = &first_inner {
+                        Some(some_inner)
+                    } else {
+                        None
+                    }
+                })
+                .map(|first_inner| {
+                    first_inner.iter().any(
+                        |item| matches!(item, RedisType::Array(Some(inner)) if !inner.is_empty()),
+                    )
+                })
+                .unwrap_or(false);
+
+            if has_some_content {
+                return Ok(CommandResponse::Immediate(resp));
+            } else {
+                // No data - register for waiting
+                let keys_only = keys_and_ids.split_at(keys_and_ids.len() / 2).0.to_vec();
+                let key_as_bytes: Vec<Bytes> = keys_only
+                    .iter()
+                    .map(redis_type_as_bytes)
+                    .collect::<Result<Vec<&Bytes>, _>>()?
+                    .into_iter()
+                    .cloned()
+                    .collect();
+
+                let (tx, rx) = oneshot::channel();
+                let identifier = store.register_xread_waiting_client(key_as_bytes, tx);
+                println!(
+                    "XREAD Waiting with timeout {} for client: {}",
+                    timeout, identifier
+                );
+
+                return Ok(CommandResponse::WaitForXREAD {
+                    timeout,
+                    receiver: rx,
+                    keys_only: keys_only.clone(),
+                    client_id: identifier,
+                });
+            }
+
+            // May be not enough to just check the outmost array for data.
+        } else {
+            return Ok(CommandResponse::Immediate(resp));
+        }
+    } else {
+        let keys_and_ids = &arguments[1..];
+        let resp = handle_xread_immediate(keys_and_ids, store)?;
+        Ok(CommandResponse::Immediate(resp))
+    }
 }
 
 fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, CommandError> {
@@ -439,10 +511,16 @@ where
 #[derive(Debug)]
 pub enum CommandResponse {
     Immediate(RedisType),
-    Wait {
+    WaitForBLPOP {
         timeout: f64,
         receiver: oneshot::Receiver<RedisType>,
         key: Bytes,
+        client_id: u64,
+    },
+    WaitForXREAD {
+        timeout: u128,
+        receiver: oneshot::Receiver<RedisType>,
+        keys_only: Vec<RedisType>,
         client_id: u64,
     },
 }
@@ -474,7 +552,7 @@ pub fn handle_command(
         "TYPE" => Ok(CommandResponse::Immediate(handle_type(arguments, store)?)),
         "XADD" => Ok(CommandResponse::Immediate(handle_xadd(arguments, store)?)),
         "XRANGE" => Ok(CommandResponse::Immediate(handle_xrange(arguments, store)?)),
-        "XREAD" => Ok(CommandResponse::Immediate(handle_xread(arguments, store)?)),
+        "XREAD" => handle_xread(arguments, store),
         "BLPOP" => handle_blpop(arguments, store),
 
         _ => Err(CommandError::UnknownCommand(format!(

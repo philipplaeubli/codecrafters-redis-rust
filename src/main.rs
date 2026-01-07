@@ -19,6 +19,7 @@ use crate::{
 mod commands;
 mod parser;
 mod store;
+mod xread_utils;
 
 #[derive(Debug)]
 enum RedisError {
@@ -34,7 +35,7 @@ enum RedisMessage {
         reply: oneshot::Sender<CommandResponse>,
     },
     SendTimeout {
-        key: Bytes,
+        key: Option<Bytes>,
         identifier: u64,
     },
 }
@@ -68,7 +69,7 @@ async fn handle_connection(
         let command_response = reply_rx.await.map_err(|_| RedisError::Concurrency)?;
         let response = match command_response {
             CommandResponse::Immediate(redis_type) => redis_type,
-            CommandResponse::Wait {
+            CommandResponse::WaitForBLPOP {
                 timeout: timeout_sec,
                 receiver,
                 key,
@@ -94,7 +95,44 @@ async fn handle_connection(
                             );
                             let _ = sender
                                 .send(RedisMessage::SendTimeout {
-                                    key,
+                                    key: Some(key),
+                                    identifier: client_id,
+                                })
+                                .await;
+                            None
+                        }
+                    }
+                };
+
+                result.unwrap_or(RedisType::Array(None))
+            }
+            CommandResponse::WaitForXREAD {
+                timeout: timeout_millis,
+                receiver,
+                keys_only,
+                client_id,
+            } => {
+                println!("Received wait command for client: {}", client_id);
+                let result = if timeout_millis == 0 {
+                    // timeout=0 means wait forever
+                    println!("Waiting forever for xread client: {}", client_id);
+                    receiver.await.ok()
+                } else {
+                    println!(
+                        "Waiting with timeout {} for xread client: {}",
+                        timeout_millis, client_id
+                    );
+                    match timeout(Duration::from_millis(timeout_millis as u64), receiver).await {
+                        Ok(Ok(value)) => Some(value),
+                        Ok(Err(_)) | Err(_) => {
+                            // Timeout or channel closed - send cleanup message
+                            println!(
+                                "Timeout or channel closed, sending cleanup message to client: {}",
+                                client_id
+                            );
+                            let _ = sender
+                                .send(RedisMessage::SendTimeout {
+                                    key: None,
                                     identifier: client_id,
                                 })
                                 .await;
@@ -151,7 +189,10 @@ async fn main() -> io::Result<()> {
                         "Cleaning up blocked client {} for key {:?}",
                         identifier, key
                     );
-                    store.remove_waiting_client(&key, identifier);
+                    if let Some(key) = key {
+                        store.remove_blpop_waiting_client(&key, identifier);
+                    } else {
+                    }
                 }
             }
         }
