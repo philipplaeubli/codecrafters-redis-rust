@@ -6,6 +6,7 @@ use tokio::sync::oneshot;
 use crate::{
     parser::RedisType,
     store::{Store, StoreError, StreamId},
+    xread_utils::xread_output_to_redis_type,
 };
 
 #[derive(Debug)]
@@ -362,28 +363,7 @@ fn handle_xread_immediate(
     let result = keys_and_ids
         .into_iter()
         .map(|(key, stream)| {
-            // super double array encoding
-            RedisType::Array(Some(vec![
-                RedisType::BulkString(key.clone()),
-                RedisType::Array(Some(
-                    store
-                        .xread(key, stream, false)
-                        .iter()
-                        .map(|(id, map)| {
-                            RedisType::Array(Some(vec![
-                                id.into(),
-                                RedisType::Array(Some(
-                                    map.iter()
-                                        .flat_map(|(key, value)| {
-                                            [key.clone().into(), value.clone().into()]
-                                        })
-                                        .collect(),
-                                )),
-                            ]))
-                        })
-                        .collect(),
-                )),
-            ]))
+            xread_output_to_redis_type(key.clone(), store.xread(key, stream, false))
         })
         .collect();
 

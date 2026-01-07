@@ -22,8 +22,8 @@ pub fn xread_output_to_redis_type(
         })
         .collect();
 
-    RedisType::Array(Some(vec![RedisType::Array(Some(vec![
+    RedisType::Array(Some(vec![
         RedisType::BulkString(key),
         RedisType::Array(Some(res)),
-    ]))]))
+    ]))
 }

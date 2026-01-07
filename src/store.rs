@@ -264,10 +264,14 @@ impl Store {
 
             if should_notify {
                 let client = self.xread_waiting_queue.swap_remove(i); // now we own it
-                let res = self.xread(key, stream_id, true);
-                let res2 = xread_output_to_redis_type(key.clone(), res);
-                println!("result for {:?} would have been {:?}", key, res2);
-                if client.sender.send(res2).is_ok() {
+
+                let res = xread_output_to_redis_type(key.clone(), self.xread(key, stream_id, true));
+
+                if client
+                    .sender
+                    .send(RedisType::Array(Some(vec![res])))
+                    .is_ok()
+                {
                     println!("Client {} notified", client.identifier);
                 }
                 // don't increment i (swap_remove brings a new element into i)
