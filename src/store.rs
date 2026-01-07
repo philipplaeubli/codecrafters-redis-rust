@@ -441,9 +441,7 @@ impl Store {
 
 fn insert_keys_and_values(arguments: &[RedisType], map: &mut HashMap<Bytes, Bytes>) {
     for chunk in arguments[0..].chunks_exact(2) {
-        let field = &chunk[0];
-        let value = &chunk[1];
-        map.insert(field.to_bytes(), value.to_bytes());
+        map.insert((&chunk[0]).to_bytes(), (&chunk[1]).to_bytes());
     }
 }
 

@@ -378,7 +378,7 @@ fn handle_xread(
 
     if possible_block.to_uppercase() == "BLOCK" {
         let timeout: u128 = argument_as_number(arguments, 1)?;
-
+        let last_argument = argument_as_str(arguments, arguments.len() - 1)?;
         let keys_and_ids = &arguments[3..];
 
         let resp = handle_xread_immediate(keys_and_ids, store)?;
@@ -402,7 +402,7 @@ fn handle_xread(
                 })
                 .unwrap_or(false);
 
-            if has_some_content {
+            if has_some_content && last_argument != "$" {
                 return Ok(CommandResponse::Immediate(resp));
             } else {
                 // No data - register for waiting
