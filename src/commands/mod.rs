@@ -14,7 +14,6 @@ pub mod utils;
 use keys::{handle_get, handle_set};
 use lists::{handle_blpop, handle_llen, handle_lpop, handle_lpush, handle_lrange, handle_rpush};
 use misc::{handle_echo, handle_ping, handle_type};
-pub use streams::xread_output_to_redis_type;
 use streams::{handle_xadd, handle_xrange, handle_xread};
 use utils::argument_as_str;
 

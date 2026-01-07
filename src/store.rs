@@ -11,7 +11,7 @@ use std::{
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use crate::commands::xread_output_to_redis_type;
+use crate::commands::utils::xread_output_to_redis_type;
 use crate::parser::RedisType;
 
 pub struct WithExpiry {
