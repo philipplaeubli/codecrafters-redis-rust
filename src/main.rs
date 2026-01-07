@@ -37,6 +37,7 @@ enum RedisError {
 enum RedisMessage {
     SendMessage {
         message: RedisType,
+        transaction: Option<VecDeque<RedisType>>,
         reply: oneshot::Sender<CommandResponse>,
     },
     SendTimeout {
@@ -67,6 +68,7 @@ async fn handle_connection(
         let (reply_tx, reply_rx) = oneshot::channel();
         let message = RedisMessage::SendMessage {
             message: result,
+            transaction: transactions.clone(),
             reply: reply_tx,
         };
         sender
@@ -77,9 +79,11 @@ async fn handle_connection(
         let command_response = reply_rx.await.map_err(|_| RedisError::Concurrency)?;
         let response = match command_response {
             CommandResponse::Immediate(redis_type) => redis_type,
-            CommandResponse::ExecTransaction => {
+            CommandResponse::ExecTransaction(redis_type) => {
                 if let Some(_transactions) = transactions {
-                    todo!()
+                    println!("Clearing transactions");
+                    transactions = None;
+                    redis_type
                 } else {
                     RedisType::SimpleError(Bytes::from("ERR EXEC without MULTI"))
                 }
@@ -188,9 +192,13 @@ async fn main() -> io::Result<()> {
 
         while let Some(cmd) = rx.recv().await {
             match cmd {
-                RedisMessage::SendMessage { message, reply } => {
+                RedisMessage::SendMessage {
+                    message,
+                    reply,
+                    transaction,
+                } => {
                     println!("Received command: {:?}", message);
-                    let command = handle_command(message, &mut store);
+                    let command = handle_command(message, &mut store, transaction);
                     match command {
                         Ok(response) => {
                             let _ = reply.send(response);

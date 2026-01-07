@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{collections::VecDeque, fmt::Display};
 
 use bytes::Bytes;
 use tokio::sync::oneshot;
@@ -30,7 +30,7 @@ pub enum CommandError {
 pub enum CommandResponse {
     Immediate(RedisType),
     StartTransaction,
-    ExecTransaction,
+    ExecTransaction(RedisType),
     WaitForBLPOP {
         timeout: f64,
         receiver: oneshot::Receiver<RedisType>,
@@ -47,6 +47,7 @@ pub enum CommandResponse {
 pub fn handle_command(
     input: RedisType,
     store: &mut Store,
+    transaction: Option<VecDeque<RedisType>>,
 ) -> Result<CommandResponse, CommandError> {
     let RedisType::Array(Some(elements)) = input else {
         return Err(CommandError::InvalidInput(
@@ -75,7 +76,28 @@ pub fn handle_command(
         "XREAD" => handle_xread(arguments, store),
         "BLPOP" => handle_blpop(arguments, store),
         "MULTI" => Ok(CommandResponse::StartTransaction),
-        "EXEC" => Ok(CommandResponse::ExecTransaction),
+        "EXEC" => {
+            if let Some(transaction) = transaction {
+                let mut responses = Vec::new();
+                for comm in transaction {
+                    let response = handle_command(comm, store, None)?;
+                    let f = match response {
+                        CommandResponse::Immediate(redis_type) => redis_type,
+                        _ => todo!(),
+                    };
+                    responses.push(f);
+                }
+                Ok(CommandResponse::ExecTransaction(RedisType::Array(Some(
+                    responses,
+                ))))
+            } else {
+                println!("No transaction in progress");
+
+                Ok(CommandResponse::ExecTransaction(RedisType::SimpleError(
+                    Bytes::from("ERR EXEC without MULTI"),
+                )))
+            }
+        }
 
         _ => Err(CommandError::UnknownCommand(format!(
             "redis command {} not supported",
