@@ -87,7 +87,7 @@ async fn handle_connection(
             CommandResponse::StartTransaction => {
                 println!("Received start transaction command");
                 transactions = Some(VecDeque::new());
-                RedisType::SimpleString(Bytes::from("OK"))
+                RedisType::SimpleError(Bytes::from("OK"))
             }
             CommandResponse::WaitForBLPOP {
                 timeout: timeout_sec,
