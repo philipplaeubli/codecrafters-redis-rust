@@ -111,7 +111,6 @@ async fn handle_connection(
             CommandResponse::WaitForXREAD {
                 timeout: timeout_millis,
                 receiver,
-                keys_only: _,
                 client_id,
             } => {
                 println!("Received wait command for client: {}", client_id);
@@ -193,7 +192,6 @@ async fn main() -> io::Result<()> {
                     );
                     if let Some(key) = key {
                         store.remove_blpop_waiting_client(&key, identifier);
-                    } else {
                     }
                 }
             }

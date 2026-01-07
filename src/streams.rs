@@ -160,7 +160,6 @@ pub fn handle_xread(
                 Ok(CommandResponse::WaitForXREAD {
                     timeout,
                     receiver: rx,
-                    keys_only: keys_only.clone(),
                     client_id: identifier,
                 })
             }

@@ -1,4 +1,4 @@
-use std::{fmt::Display, str::FromStr};
+use std::fmt::Display;
 
 use bytes::Bytes;
 use tokio::sync::oneshot;
@@ -180,7 +180,6 @@ pub enum CommandResponse {
     WaitForXREAD {
         timeout: u128,
         receiver: oneshot::Receiver<RedisType>,
-        keys_only: Vec<RedisType>,
         client_id: u64,
     },
 }

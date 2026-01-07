@@ -34,11 +34,9 @@ pub fn argument_as_str(arguments: &[RedisType], index: usize) -> Result<&str, Co
         Some(RedisType::BulkString(b)) => str::from_utf8(b).map_err(|_| {
             CommandError::InvalidInput("Invalid argument: Must be a valid UTF-8 string".into())
         }),
-        _ => {
-            return Err(CommandError::InvalidInput(
-                "Invalid argument: Must be a bulkstring".into(),
-            ));
-        }
+        _ => Err(CommandError::InvalidInput(
+            "Invalid argument: Must be a bulkstring".into(),
+        )),
     }
 }
 
