@@ -28,6 +28,7 @@ pub fn handle_get(arguments: &[RedisType], store: &Store) -> Result<RedisType, C
         Err(StoreError::StreamIdNotGreaterThan0) => Err(CommandError::InvalidInput(
             "Stream ID must be greater than 0-0".into(),
         )),
+        Err(StoreError::ValueError) => Err(CommandError::InvalidInput("Invalid value".into())),
     }
 }
 
@@ -68,4 +69,20 @@ pub fn handle_set(arguments: &[RedisType], store: &mut Store) -> Result<RedisTyp
             _ => CommandError::StoreError(store_error),
         })?;
     Ok(RedisType::SimpleString(Bytes::from_static(b"OK")))
+}
+
+pub fn handle_incr(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
+    let key = extract_key(arguments)?;
+
+    let amount = if arguments.len() == 1 {
+        1
+    } else {
+        argument_as_number(arguments, 0)?
+    };
+
+    let res = store.incr(key, amount);
+    match res {
+        Ok(value) => Ok(RedisType::Integer(value as i128)),
+        Err(_) => Err(CommandError::StoreError(StoreError::KeyNotFound)),
+    }
 }

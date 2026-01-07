@@ -1,4 +1,6 @@
+use std::num::ParseIntError;
 use std::ops::Bound::{Excluded, Included, Unbounded};
+use std::str::Utf8Error;
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     fmt::Display,
@@ -21,6 +23,7 @@ pub enum StoreError {
     KeyNotFound,
     KeyExpired,
     TimeError,
+    ValueError,
     StreamIdSmallerThanLast,
     StreamIdNotGreaterThan0,
 }
@@ -28,6 +31,17 @@ pub enum StoreError {
 impl From<SystemTimeError> for StoreError {
     fn from(_err: SystemTimeError) -> Self {
         StoreError::TimeError
+    }
+}
+
+impl From<Utf8Error> for StoreError {
+    fn from(_value: Utf8Error) -> Self {
+        StoreError::ValueError
+    }
+}
+impl From<ParseIntError> for StoreError {
+    fn from(_value: ParseIntError) -> Self {
+        StoreError::ValueError
     }
 }
 
@@ -176,6 +190,14 @@ impl Store {
         let key_value = WithExpiry { value, expires };
         self.keys.insert(key, key_value);
         Ok(())
+    }
+
+    pub fn incr(&mut self, key: &Bytes, amount: u128) -> Result<u128, StoreError> {
+        let value_with_expiry = self.keys.get_mut(key).ok_or(StoreError::KeyNotFound)?;
+        let existing_val = str::from_utf8(&value_with_expiry.value)?.parse::<u128>()?;
+        let new_val = existing_val + amount;
+        value_with_expiry.value = Bytes::from(format!("{}", new_val));
+        Ok(new_val)
     }
 
     pub fn llen(&self, key: &Bytes) -> Result<usize, StoreError> {
@@ -480,6 +502,7 @@ impl Display for StoreError {
                 write!(f, "Stream ID smaller than last added Id")
             }
             StoreError::StreamIdNotGreaterThan0 => write!(f, "Stream ID must be greater than 0-0"),
+            StoreError::ValueError => write!(f, "Stored value is invalid"),
         }
     }
 }

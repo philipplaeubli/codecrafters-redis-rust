@@ -3,7 +3,7 @@ use std::fmt::Display;
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use crate::{parser::RedisType, store::Store};
+use crate::{commands::keys::handle_incr, parser::RedisType, store::Store};
 
 mod keys;
 mod lists;
@@ -70,6 +70,7 @@ pub fn handle_command(
         "TYPE" => Ok(CommandResponse::Immediate(handle_type(arguments, store)?)),
         "XADD" => Ok(CommandResponse::Immediate(handle_xadd(arguments, store)?)),
         "XRANGE" => Ok(CommandResponse::Immediate(handle_xrange(arguments, store)?)),
+        "INCR" => Ok(CommandResponse::Immediate(handle_incr(arguments, store)?)),
         "XREAD" => handle_xread(arguments, store),
         "BLPOP" => handle_blpop(arguments, store),
 
