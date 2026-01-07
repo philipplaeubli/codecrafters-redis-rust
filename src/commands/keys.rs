@@ -1,8 +1,10 @@
 use bytes::Bytes;
 
+use super::{
+    CommandError,
+    utils::{argument_as_bytes, argument_as_number, argument_as_str, extract_key},
+};
 use crate::{
-    command_utils::{argument_as_bytes, argument_as_number, argument_as_str, extract_key},
-    commands::CommandError,
     parser::RedisType,
     store::{Store, StoreError},
 };
@@ -28,6 +30,7 @@ pub fn handle_get(arguments: &[RedisType], store: &Store) -> Result<RedisType, C
         )),
     }
 }
+
 pub fn handle_set(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
     if arguments.len() != 2 && arguments.len() != 4 {
         // either it's a simple SET, or it's a SET with an expiry

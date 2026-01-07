@@ -2,7 +2,8 @@ use std::str::FromStr;
 
 use bytes::Bytes;
 
-use crate::{commands::CommandError, parser::RedisType};
+use super::CommandError;
+use crate::parser::RedisType;
 
 pub fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes, CommandError> {
     let bytes = match arguments.get(index) {
@@ -16,6 +17,7 @@ pub fn argument_as_bytes(arguments: &[RedisType], index: usize) -> Result<&Bytes
     };
     Ok(bytes)
 }
+
 pub fn redis_type_as_bytes(redis_type: &RedisType) -> Result<&Bytes, CommandError> {
     match redis_type {
         RedisType::BulkString(b) => Ok(b),
@@ -29,6 +31,7 @@ pub fn redis_type_as_bytes(redis_type: &RedisType) -> Result<&Bytes, CommandErro
 pub fn extract_key(arguments: &[RedisType]) -> Result<&Bytes, CommandError> {
     argument_as_bytes(arguments, 0)
 }
+
 pub fn argument_as_str(arguments: &[RedisType], index: usize) -> Result<&str, CommandError> {
     match arguments.get(index) {
         Some(RedisType::BulkString(b)) => str::from_utf8(b).map_err(|_| {

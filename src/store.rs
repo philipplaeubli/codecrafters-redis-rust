@@ -9,8 +9,8 @@ use std::{
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
+use crate::commands::xread_output_to_redis_type;
 use crate::parser::RedisType;
-use crate::streams::xread_output_to_redis_type;
 
 pub struct WithExpiry {
     value: Bytes,

@@ -1,9 +1,11 @@
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
+use super::{
+    CommandError, CommandResponse,
+    utils::{argument_as_number, extract_key},
+};
 use crate::{
-    command_utils::{argument_as_number, extract_key},
-    commands::{CommandError, CommandResponse},
     parser::RedisType,
     store::{Store, StoreError},
 };

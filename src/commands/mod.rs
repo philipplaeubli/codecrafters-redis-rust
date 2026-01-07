@@ -3,47 +3,28 @@ use std::fmt::Display;
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
-use crate::{
-    command_utils::{argument_as_str, extract_key},
-    keys::{handle_get, handle_set},
-    lists::{handle_blpop, handle_llen, handle_lpop, handle_lpush, handle_lrange, handle_rpush},
-    parser::RedisType,
-    store::{Store, StoreError},
-    streams::{handle_xadd, handle_xrange, handle_xread},
-};
+use crate::{parser::RedisType, store::Store};
+
+mod keys;
+mod lists;
+mod misc;
+mod streams;
+pub mod utils;
+
+use keys::{handle_get, handle_set};
+use lists::{handle_blpop, handle_llen, handle_lpop, handle_lpush, handle_lrange, handle_rpush};
+use misc::{handle_echo, handle_ping, handle_type};
+pub use streams::xread_output_to_redis_type;
+use streams::{handle_xadd, handle_xrange, handle_xread};
+use utils::argument_as_str;
+
+use crate::store::StoreError;
 
 #[derive(Debug)]
 pub enum CommandError {
     InvalidInput(String),
     UnknownCommand(String),
     StoreError(StoreError),
-}
-
-fn handle_pong(arguments: &[RedisType]) -> Result<RedisType, CommandError> {
-    if !arguments.is_empty() {
-        // as per https://redis.io/docs/latest/commands/ping/, ping should return the arguments passed to it
-        return handle_echo(arguments);
-    }
-    Ok(RedisType::SimpleString(Bytes::from_static(b"PONG")))
-}
-
-fn handle_echo(arguments: &[RedisType]) -> Result<RedisType, CommandError> {
-    let message = arguments.first();
-    match message {
-        Some(RedisType::BulkString(value)) => Ok(RedisType::BulkString(value.clone())),
-        _ => Ok(RedisType::SimpleString(Bytes::from_static(b""))),
-    }
-}
-
-fn handle_type(arguments: &[RedisType], store: &mut Store) -> Result<RedisType, CommandError> {
-    let key = extract_key(arguments)?;
-    match store.get_type(key) {
-        Ok(resp) => Ok(RedisType::SimpleString(resp)),
-        Err(error) => match error {
-            StoreError::KeyNotFound => Ok(RedisType::SimpleString("none".into())),
-            _ => Err(CommandError::StoreError(error)),
-        },
-    }
 }
 
 #[derive(Debug)]
@@ -77,7 +58,7 @@ pub fn handle_command(
     let arguments = &elements[1..];
 
     match command.as_str() {
-        "PING" => Ok(CommandResponse::Immediate(handle_pong(arguments)?)),
+        "PING" => Ok(CommandResponse::Immediate(handle_ping(arguments)?)),
         "ECHO" => Ok(CommandResponse::Immediate(handle_echo(arguments)?)),
         "LRANGE" => Ok(CommandResponse::Immediate(handle_lrange(arguments, store)?)),
         "RPUSH" => Ok(CommandResponse::Immediate(handle_rpush(arguments, store)?)),

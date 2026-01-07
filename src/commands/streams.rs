@@ -3,9 +3,11 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use tokio::sync::oneshot;
 
+use super::{
+    CommandError, CommandResponse,
+    utils::{argument_as_number, argument_as_str, extract_key, redis_type_as_bytes},
+};
 use crate::{
-    command_utils::{argument_as_number, argument_as_str, extract_key, redis_type_as_bytes},
-    commands::{CommandError, CommandResponse},
     parser::RedisType,
     store::{Store, StoreError, StreamId},
 };
@@ -30,6 +32,7 @@ pub fn handle_xadd(arguments: &[RedisType], store: &mut Store) -> Result<RedisTy
         ))),
     }
 }
+
 pub fn handle_xrange(
     arguments: &[RedisType],
     store: &mut Store,
@@ -174,6 +177,7 @@ pub fn handle_xread(
         Ok(CommandResponse::Immediate(resp))
     }
 }
+
 pub fn xread_output_to_redis_type(
     key: Bytes,
     input: Vec<(StreamId, HashMap<Bytes, Bytes>)>,
@@ -197,6 +201,7 @@ pub fn xread_output_to_redis_type(
         RedisType::Array(Some(res)),
     ]))
 }
+
 fn extract_stream_id_values(
     argument: &RedisType,
 ) -> Result<(Option<u128>, Option<u128>), CommandError> {

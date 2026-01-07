@@ -16,13 +16,9 @@ use crate::{
     parser::{RedisType, RespParseError, parse_resp},
     store::Store,
 };
-mod command_utils;
 mod commands;
-mod keys;
-mod lists;
 mod parser;
 mod store;
-mod streams;
 #[derive(Debug)]
 enum RedisError {
     InvalidResp(RespParseError),
