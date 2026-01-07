@@ -29,6 +29,8 @@ pub enum CommandError {
 #[derive(Debug)]
 pub enum CommandResponse {
     Immediate(RedisType),
+    StartTransaction,
+    ExecTransaction,
     WaitForBLPOP {
         timeout: f64,
         receiver: oneshot::Receiver<RedisType>,
@@ -72,6 +74,8 @@ pub fn handle_command(
         "INCR" => Ok(CommandResponse::Immediate(handle_incr(arguments, store)?)),
         "XREAD" => handle_xread(arguments, store),
         "BLPOP" => handle_blpop(arguments, store),
+        "MULTI" => Ok(CommandResponse::StartTransaction),
+        "EXEC" => Ok(CommandResponse::ExecTransaction),
 
         _ => Err(CommandError::UnknownCommand(format!(
             "redis command {} not supported",

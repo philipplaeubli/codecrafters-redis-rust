@@ -4,7 +4,6 @@ use std::str::Utf8Error;
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     fmt::Display,
-    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, SystemTimeError, UNIX_EPOCH},
 };
 
@@ -13,6 +12,7 @@ use tokio::sync::oneshot;
 
 use crate::commands::utils::xread_output_to_redis_type;
 use crate::parser::RedisType;
+use crate::transactions::create_identifier;
 
 pub struct WithExpiry {
     value: Bytes,
@@ -77,8 +77,6 @@ pub struct WaitingXREADClient {
     pub keys: Vec<Bytes>,
     pub sender: oneshot::Sender<RedisType>,
 }
-
-static NEXT_CLIENT_ID: AtomicU64 = AtomicU64::new(0);
 
 impl From<StreamId> for RedisType {
     fn from(value: StreamId) -> Self {
@@ -248,7 +246,7 @@ impl Store {
         key: Bytes,
         sender: oneshot::Sender<RedisType>,
     ) -> u64 {
-        let identifier = NEXT_CLIENT_ID.fetch_add(1, Ordering::SeqCst);
+        let identifier = create_identifier();
         let client = WaitingLPOPClient { identifier, sender };
 
         self.blpop_waiting_queue
@@ -264,7 +262,7 @@ impl Store {
         keys: Vec<Bytes>,
         sender: oneshot::Sender<RedisType>,
     ) -> u64 {
-        let identifier = NEXT_CLIENT_ID.fetch_add(1, Ordering::SeqCst);
+        let identifier = create_identifier();
         let client = WaitingXREADClient {
             identifier,
             keys,

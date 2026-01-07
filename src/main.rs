@@ -1,4 +1,8 @@
-use std::{fmt::Display, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt::Display,
+    time::Duration,
+};
 
 use bytes::{Bytes, BytesMut};
 use tokio::{
@@ -15,10 +19,13 @@ use crate::{
     commands::{CommandResponse, handle_command},
     parser::{RedisType, RespParseError, parse_resp},
     store::Store,
+    transactions::create_identifier,
 };
 mod commands;
 mod parser;
 mod store;
+mod transactions;
+
 #[derive(Debug)]
 enum RedisError {
     InvalidResp(RespParseError),
@@ -43,13 +50,16 @@ async fn handle_connection(
     sender: &Sender<RedisMessage>,
 ) -> Result<(), RedisError> {
     let mut buffer = BytesMut::with_capacity(1024);
+    let client_id = create_identifier();
+    let mut transactions: Option<VecDeque<RedisType>> = None;
     loop {
+        println!("Waiting for data for client: {}", client_id);
         let read_length = stream
             .read_buf(&mut buffer)
             .await
             .map_err(RedisError::Networking)?;
         if read_length == 0 {
-            println!("Client closed connection");
+            println!("Client {} closed connection", client_id);
             break;
         }
         let result = parse_resp(&mut buffer).map_err(RedisError::InvalidResp)?;
@@ -67,6 +77,18 @@ async fn handle_connection(
         let command_response = reply_rx.await.map_err(|_| RedisError::Concurrency)?;
         let response = match command_response {
             CommandResponse::Immediate(redis_type) => redis_type,
+            CommandResponse::ExecTransaction => {
+                if let Some(_transactions) = transactions {
+                    todo!()
+                } else {
+                    RedisType::SimpleString(Bytes::from("ERR EXEC without MULTI"))
+                }
+            }
+            CommandResponse::StartTransaction => {
+                println!("Received start transaction command");
+                transactions = Some(VecDeque::new());
+                RedisType::SimpleString(Bytes::from("OK"))
+            }
             CommandResponse::WaitForBLPOP {
                 timeout: timeout_sec,
                 receiver,
@@ -195,6 +217,7 @@ async fn main() -> io::Result<()> {
     });
 
     println!("Listening on {} - awaiting connections", redis_address);
+
     loop {
         let (stream, _addr) = tcp_listener.accept().await?;
         println!("Accepted connection from client");
