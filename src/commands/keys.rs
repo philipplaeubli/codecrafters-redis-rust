@@ -83,6 +83,10 @@ pub fn handle_incr(arguments: &[RedisType], store: &mut Store) -> Result<RedisTy
     let res = store.incr(key, amount);
     match res {
         Ok(value) => Ok(RedisType::Integer(value as i128)),
+        Err(StoreError::ValueError) => Ok(RedisType::SimpleError(
+            "ERR value is not an integer or out of range".into(),
+        )),
+
         Err(_) => Err(CommandError::StoreError(StoreError::KeyNotFound)),
     }
 }
