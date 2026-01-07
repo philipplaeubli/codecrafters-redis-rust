@@ -193,7 +193,13 @@ impl Store {
     }
 
     pub fn incr(&mut self, key: &Bytes, amount: u128) -> Result<u128, StoreError> {
+        if !self.keys.contains_key(key) {
+            self.set_with_expiry(key.clone(), Bytes::from("1"), None)?;
+            return Ok(1);
+        }
+
         let value_with_expiry = self.keys.get_mut(key).ok_or(StoreError::KeyNotFound)?;
+
         let existing_val = str::from_utf8(&value_with_expiry.value)?.parse::<u128>()?;
         let new_val = existing_val + amount;
         value_with_expiry.value = Bytes::from(format!("{}", new_val));
